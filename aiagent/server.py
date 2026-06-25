@@ -186,6 +186,61 @@ def run_server(
                 "convs": current_agent.list_conversations(),
             }, ensure_ascii=False))
 
+        elif cmd == "sessions":
+            try:
+                limit = max(1, min(50, int(msg.get("limit", 20) or 20)))
+            except (TypeError, ValueError):
+                limit = 20
+            sessions = current_agent.list_sessions(limit=limit)
+            stdout(json.dumps({
+                "type": "sessions",
+                "sessions": sessions,
+                "text": _format_sessions(sessions),
+            }, ensure_ascii=False))
+
+        elif cmd == "session_search":
+            query = str(msg.get("query", "")).strip()
+            if not query:
+                stdout(json.dumps({
+                    "type": "session_search",
+                    "text": "用法: /session-search <关键词>",
+                }, ensure_ascii=False))
+                continue
+            try:
+                limit = max(1, min(20, int(msg.get("limit", 10) or 10)))
+            except (TypeError, ValueError):
+                limit = 10
+            results = current_agent.search_sessions(query, limit=limit)
+            stdout(json.dumps({
+                "type": "session_search",
+                "results": results,
+                "text": _format_session_search(results),
+            }, ensure_ascii=False))
+
+        elif cmd == "session_load":
+            session_id = str(msg.get("id") or "").strip()
+            if not session_id:
+                stdout(json.dumps({
+                    "type": "session_loaded",
+                    "success": False,
+                    "text": "用法: /session-load <session_id>",
+                }, ensure_ascii=False))
+                continue
+            _auto_save(current_agent)
+            result = current_agent.load_session(session_id)
+            stdout(json.dumps({
+                "type": "session_loaded",
+                "success": bool(result.get("ok")),
+                "title": (result.get("session") or {}).get("title", ""),
+                "usage": _usage_payload(current_agent),
+                "task": _agent_task_status(current_agent),
+                "text": (
+                    f"已加载会话 {session_id}"
+                    if result.get("ok")
+                    else result.get("error", "加载会话失败")
+                ),
+            }, ensure_ascii=False))
+
         elif cmd == "resume":
             sid = msg.get("id", "")
             if sid:
@@ -233,6 +288,13 @@ def run_server(
             stdout(json.dumps({
                 "type": "memory",
                 "text": _format_memory_status(status),
+            }, ensure_ascii=False))
+
+        elif cmd == "companion":
+            status = current_agent.companion_status()
+            stdout(json.dumps({
+                "type": "companion",
+                "text": status.get("text", "暂无陪伴状态。"),
             }, ensure_ascii=False))
 
         elif cmd == "memory_search":
@@ -654,6 +716,52 @@ def _format_memory_search(results: list[dict]) -> str:
             f"  {content}"
         )
     return "\n".join(lines)
+
+
+def _format_sessions(sessions: list[dict]) -> str:
+    if not sessions:
+        return "暂无历史会话。"
+    lines = [f"历史会话 · {len(sessions)} 条"]
+    for index, session in enumerate(sessions, 1):
+        title = str(session.get("title") or "(untitled)").strip()
+        if len(title) > 60:
+            title = title[:60] + "..."
+        lines.append(
+            f"[{index}] {session.get('id', '')}\n"
+            f"    {title}\n"
+            f"    {session.get('message_count', 0)} messages · "
+            f"{_format_timestamp(session.get('updated_at'))}"
+        )
+    lines.append("")
+    lines.append("使用 /session-load <id> 恢复某个会话。")
+    return "\n".join(lines)
+
+
+def _format_session_search(results: list[dict]) -> str:
+    if not results:
+        return "没有找到相关历史会话。"
+    lines = [f"历史搜索 · 找到 {len(results)} 条"]
+    for result in results:
+        snippet = " ".join(str(result.get("snippet") or result.get("content") or "").split())
+        if len(snippet) > 260:
+            snippet = snippet[:260] + "..."
+        title = str(result.get("title") or "(untitled)").strip()
+        role = result.get("role", "?")
+        lines.append(
+            f"{result.get('session_id', '')} · {role} · {_format_timestamp(result.get('created_at'))}\n"
+            f"  {title}\n"
+            f"  {snippet}"
+        )
+    lines.append("")
+    lines.append("使用 /session-load <session_id> 恢复完整会话。")
+    return "\n".join(lines)
+
+
+def _format_timestamp(value) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(value)))
+    except (TypeError, ValueError, OSError):
+        return "unknown time"
 
 
 def _request_command_approval(

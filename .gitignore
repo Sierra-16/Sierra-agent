@@ -30,8 +30,12 @@ logs/
 tasks/*.sqlite3
 tasks/*.sqlite3-wal
 tasks/*.sqlite3-shm
+data/*.sqlite3
+data/*.sqlite3-wal
+data/*.sqlite3-shm
 memory/USER.md
 memory/MEMORY.md
+memory/COMPANION_STATE.json
 memory/*.sqlite3
 memory/*.sqlite3-wal
 memory/*.sqlite3-shm

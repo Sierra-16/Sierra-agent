@@ -1,6 +1,7 @@
 import json
 import time
 
+from .history_recall import build_history_context, recall_history
 from .safety import sanitize_arguments, sanitize_text
 from .token_utils import estimate_tokens
 
@@ -86,6 +87,21 @@ def run_conversation_loop(
             )
         except Exception:
             recalled_context = ""
+    history_context = ""
+    try:
+        history_results = recall_history(
+            agent,
+            user_message,
+            config=getattr(agent, "history_recall_config", None),
+        )
+        history_context = build_history_context(
+            history_results,
+            config=getattr(agent, "history_recall_config", None),
+        )
+        if history_context and on_status:
+            on_status({"type": "history_recall", "count": len(history_results)})
+    except Exception:
+        history_context = ""
 
     def on_delta(event):
         if event["type"] == "reasoning":
@@ -424,6 +440,8 @@ def run_conversation_loop(
         preflight_messages = [{"role": "system", "content": agent.system_prompt}]
         if recalled_context:
             preflight_messages.append({"role": "system", "content": recalled_context})
+        if history_context:
+            preflight_messages.append({"role": "system", "content": history_context})
         if task_context:
             preflight_messages.append({"role": "system", "content": task_context})
         preflight_messages.extend(agent.messages)
@@ -468,6 +486,11 @@ def run_conversation_loop(
                         "role": "system",
                         "content": recalled_context,
                     })
+                if history_context:
+                    compacted_preflight.append({
+                        "role": "system",
+                        "content": history_context,
+                    })
                 if task_context:
                     compacted_preflight.append({
                         "role": "system",
@@ -506,6 +529,8 @@ def run_conversation_loop(
         api_messages = [{"role": "system", "content": agent.system_prompt}]
         if recalled_context:
             api_messages.append({"role": "system", "content": recalled_context})
+        if history_context:
+            api_messages.append({"role": "system", "content": history_context})
         if task_context:
             api_messages.append({"role": "system", "content": task_context})
         api_messages.extend(agent.messages)
@@ -574,6 +599,14 @@ def run_conversation_loop(
             saved = memory_result.get("saved", [])
             if on_status and saved:
                 on_status({"type": "memory_saved", "count": len(saved)})
+        companion_due = getattr(agent, "companion_review_due", None)
+        review_companion = getattr(agent, "review_companion_state", None)
+        if callable(companion_due) and callable(review_companion) and companion_due():
+            if on_status:
+                on_status({"type": "companion_check"})
+            companion_result = review_companion()
+            if on_status and companion_result.get("changed"):
+                on_status({"type": "companion_updated"})
         return final_text
 
     return "已达到最大迭代次数，未能得到最终回答。"

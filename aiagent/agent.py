@@ -3,6 +3,8 @@ import logging
 import os
 
 from .conversation_store import ConversationStore
+from .companion_state import CompanionStateStore, parse_companion_update
+from .session_db import SessionDB
 from .llm import LLMClient
 from .tools.registry import registry
 from .system_prompt import build_system_prompt
@@ -45,10 +47,13 @@ class Agent:
         memory_config=None,
         task_config=None,
         skill_config=None,
+        session_config=None,
+        companion_config=None,
         workspace=None,
         sierra_dir=None,
     ):
         self.llm = LLMClient(base_url, api_key, model=model, max_tokens=max_tokens, temperature=temperature)
+        self.model = model
         self.tools = registry
         self.safety = SafetyGate()
         self.permission_policy = PermissionPolicy(permission_config)
@@ -103,7 +108,45 @@ class Agent:
             1000,
             int(memory_config.get("review_max_chars", 16000)),
         )
+        companion_config = companion_config if isinstance(companion_config, dict) else {}
+        companion_base_dir = sierra_dir or os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..")
+        )
+        self.companion_state = None
+        try:
+            self.companion_state = CompanionStateStore.from_config(
+                companion_config,
+                base_dir=companion_base_dir,
+            )
+        except Exception as exc:
+            logger.warning("Companion state disabled: %s", exc)
+        self.companion_review_interval = max(
+            0,
+            int(companion_config.get("review_interval", self.memory_review_interval)),
+        )
+        self.companion_review_max_chars = max(
+            1000,
+            int(companion_config.get("review_max_chars", self.memory_review_max_chars)),
+        )
         self.store = ConversationStore()
+        session_config = session_config if isinstance(session_config, dict) else {}
+        self.history_recall_config = (
+            session_config.get("recall", {})
+            if isinstance(session_config.get("recall", {}), dict)
+            else {}
+        )
+        session_base_dir = sierra_dir or os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..")
+        )
+        self.session_db = None
+        try:
+            self.session_db = SessionDB.from_config(
+                session_config,
+                base_dir=session_base_dir,
+            )
+        except Exception as exc:
+            logger.warning("Session database disabled: %s", exc)
+        self._bootstrap_session_db_from_json()
         self.conv_id = None
         self.task_manager = None
         task_config = task_config or {}
@@ -122,6 +165,7 @@ class Agent:
             self.tools.unregister("get_plan")
             self.tools.unregister("resolve_task_execution")
         self._turns_since_memory_review = 0
+        self._turns_since_companion_review = 0
         self.context_window = max(1, int(context_window))
         self.current_context_tokens = 0
         self.context_tokens_estimated = False
@@ -228,6 +272,11 @@ class Agent:
         extra_parts = [f"当前模型 : {self.model}"]
         if memory_text:
             extra_parts.append(memory_text)
+        companion_state = getattr(self, "companion_state", None)
+        if companion_state is not None:
+            companion_text = companion_state.prompt_context()
+            if companion_text:
+                extra_parts.append(companion_text)
         skills_prompt = self.skill_index.build(
             self.skills,
             available_tools=self.tools.names(),
@@ -341,6 +390,99 @@ class Agent:
         except Exception as e:
             return {"saved": [], "error": str(e)}
 
+    def companion_review_due(self):
+        """Record a completed turn and report whether companion state review is due."""
+        companion_state = getattr(self, "companion_state", None)
+        interval = int(getattr(self, "companion_review_interval", 0) or 0)
+        if companion_state is None or interval <= 0:
+            return False
+        self._turns_since_companion_review = (
+            int(getattr(self, "_turns_since_companion_review", 0) or 0) + 1
+        )
+        return self._turns_since_companion_review >= interval
+
+    def review_companion_state(self):
+        """Refresh Sierra's lightweight relationship/session state from recent turns."""
+        self._turns_since_companion_review = 0
+        companion_state = getattr(self, "companion_state", None)
+        if companion_state is None:
+            return {"changed": False}
+
+        transcript = self._build_companion_review_transcript()
+        if not transcript:
+            return {"changed": False}
+
+        current_state = companion_state.load()
+        prompt = (
+            "你是 Sierra 的陪伴状态整理器。请根据近期对话，更新 Sierra 与用户之间的长期陪伴状态。\n"
+            "只返回严格 JSON，不要解释，不要 Markdown。\n"
+            "格式: {\"current_focus\":\"...\",\"collaboration_style\":\"...\","
+            "\"companion_tone\":\"...\",\"recent_mood\":\"...\",\"open_threads\":[\"...\"]}\n\n"
+            "规则:\n"
+            "- current_focus: 用户近期最主要的长期目标或项目。\n"
+            "- collaboration_style: 用户希望 Sierra 怎样协作、指导或接管。\n"
+            "- companion_tone: 适合当前关系的语气，简短描述即可。\n"
+            "- recent_mood: 用户近期明显的状态或情绪；不确定就留空。\n"
+            "- open_threads: 尚未收束、下次应该接上的具体线索，最多 8 条。\n"
+            "- 只记录对后续陪伴和协作有帮助的信息，不记录一次性细节、密钥、隐私凭证。\n"
+            "- 如果旧状态仍然准确，可以原样返回；如果没有信息，字段留空或返回空列表。"
+        )
+        review_content = (
+            "【当前陪伴状态】\n"
+            f"{json.dumps(current_state, ensure_ascii=False, indent=2)}\n\n"
+            "【近期对话】\n"
+            f"{transcript}"
+        )
+
+        try:
+            response = self.llm.chat([
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": review_content},
+            ])
+            self.count_tokens(response["usage"])
+            updates = parse_companion_update(response.get("content") or "")
+            result = companion_state.update(updates)
+            if result.get("changed"):
+                self.refresh_system_prompt()
+            return result
+        except Exception as exc:
+            return {"changed": False, "error": str(exc)}
+
+    def _build_companion_review_transcript(self):
+        turns = []
+        current = None
+
+        for message in self.messages:
+            role = message.get("role")
+            content = message.get("content")
+            if role == "user":
+                if current and current.get("assistant"):
+                    turns.append(current)
+                current = {"user": str(content or ""), "assistant": ""}
+            elif role == "assistant" and current and content:
+                current["assistant"] = str(content)
+
+        if current and current.get("assistant"):
+            turns.append(current)
+
+        interval = max(1, int(getattr(self, "companion_review_interval", 1) or 1))
+        max_chars = int(getattr(self, "companion_review_max_chars", 16000) or 16000)
+        recent_turns = turns[-interval:]
+        blocks = []
+        used_chars = 0
+        for turn in reversed(recent_turns):
+            block = (
+                f"用户:\n{turn['user'][:1200]}\n"
+                f"Sierra:\n{turn['assistant'][:2000]}"
+            )
+            if blocks and used_chars + len(block) > max_chars:
+                break
+            blocks.append(block[:max_chars])
+            used_chars += len(block)
+
+        blocks.reverse()
+        return "\n\n---\n\n".join(blocks)
+
     def _build_memory_review_transcript(self):
         turns = []
         current = None
@@ -378,12 +520,24 @@ class Agent:
         """Restore the periodic counter after loading or transferring a session."""
         if self.memory_review_interval <= 0:
             self._turns_since_memory_review = 0
+        else:
+            completed_user_turns = sum(
+                1 for message in self.messages if message.get("role") == "user"
+            )
+            self._turns_since_memory_review = (
+                completed_user_turns % self.memory_review_interval
+            )
+
+        companion_state = getattr(self, "companion_state", None)
+        companion_interval = int(getattr(self, "companion_review_interval", 0) or 0)
+        if companion_state is None or companion_interval <= 0:
+            self._turns_since_companion_review = 0
             return
         completed_user_turns = sum(
             1 for message in self.messages if message.get("role") == "user"
         )
-        self._turns_since_memory_review = (
-            completed_user_turns % self.memory_review_interval
+        self._turns_since_companion_review = (
+            completed_user_turns % companion_interval
         )
 
     def _parse_memory_operations(self, text):
@@ -421,6 +575,7 @@ class Agent:
             task_manager.bind_conversation(None)
         self.messages = []
         self._turns_since_memory_review = 0
+        self._turns_since_companion_review = 0
         self.current_context_tokens = 0
         self.context_tokens_estimated = False
 
@@ -455,10 +610,17 @@ class Agent:
     def save_conversation(self, usage, title=""):
         self.ensure_conversation_id()
         self.store.save(self.conv_id, self.messages, usage, title)
+        self._sync_session_db(usage=usage, title=title)
 
     def load_conversation(self, conv_id):
         self.conv_id = conv_id
         self.messages, usage = self.store.load(conv_id)
+        if not self.messages and self.session_db is not None:
+            try:
+                self.messages = self.session_db.get_messages(conv_id)
+                usage = {}
+            except Exception as exc:
+                logger.warning("Session database load failed: %s", exc)
         if self.task_manager is not None:
             self.task_manager.bind_conversation(conv_id)
         self._reconcile_uncertain_tool_calls()
@@ -480,6 +642,62 @@ class Agent:
     def list_conversations(self):
         return self.store.list_all()
 
+    def _bootstrap_session_db_from_json(self):
+        if self.session_db is None:
+            return
+        try:
+            conversations = self.store.list_all()
+        except Exception as exc:
+            logger.warning("Conversation index import skipped: %s", exc)
+            return
+        for conversation in conversations:
+            conv_id = conversation.get("id")
+            if not conv_id:
+                continue
+            try:
+                messages, usage = self.store.load(conv_id)
+                if not messages:
+                    continue
+                self.session_db.replace_session(
+                    conv_id,
+                    messages,
+                    title=conversation.get("title", ""),
+                    model=self.model,
+                    cwd=self.workspace,
+                    usage=usage,
+                    created_at=conversation.get("created"),
+                    updated_at=conversation.get("updated"),
+                )
+            except Exception as exc:
+                logger.warning("Conversation %s import skipped: %s", conv_id, exc)
+
+    def list_sessions(self, limit=20):
+        if self.session_db is None:
+            return []
+        return self.session_db.list_sessions(limit=limit)
+
+    def search_sessions(self, query, limit=10):
+        if self.session_db is None:
+            return []
+        return self.session_db.search_messages(query, limit=limit)
+
+    def load_session(self, session_id):
+        if self.session_db is None:
+            return {"ok": False, "error": "session database is not enabled"}
+        session = self.session_db.get_session(session_id)
+        if not session:
+            return {"ok": False, "error": f"unknown session: {session_id}"}
+        self.conv_id = session_id
+        self.messages = self.session_db.get_messages(session_id)
+        if self.task_manager is not None:
+            self.task_manager.bind_conversation(session_id)
+        self._reconcile_uncertain_tool_calls()
+        self.sync_memory_review_state()
+        self.total_input_tokens = int(session.get("input_tokens", 0) or 0)
+        self.total_output_tokens = int(session.get("output_tokens", 0) or 0)
+        self.refresh_context_estimate()
+        return {"ok": True, "session": session, "messages": self.messages}
+
     def mcp_status(self):
         return self.mcp.status()
 
@@ -500,6 +718,24 @@ class Agent:
 
     def memory_clear(self):
         return self.memory_manager.clear()
+
+    def companion_status(self):
+        companion_state = getattr(self, "companion_state", None)
+        if companion_state is None:
+            return {"enabled": False, "text": "陪伴状态模块未启用。"}
+        return {
+            "enabled": True,
+            "state": companion_state.load(),
+            "text": companion_state.display_text(),
+        }
+
+    def companion_clear(self):
+        companion_state = getattr(self, "companion_state", None)
+        if companion_state is None:
+            return {"ok": False, "error": "陪伴状态模块未启用。"}
+        state = companion_state.clear()
+        self.refresh_system_prompt()
+        return {"ok": True, "state": state}
 
     def ensure_conversation_id(self):
         if not self.conv_id:
@@ -528,9 +764,27 @@ class Agent:
                 usage=self.usage_snapshot(),
                 title=title,
             )
+            self._sync_session_db(usage=self.usage_snapshot(), title=title)
             return True
         except Exception as exc:
             logger.warning("Conversation checkpoint failed: %s", exc)
+            return False
+
+    def _sync_session_db(self, usage=None, title=""):
+        if self.session_db is None or not self.conv_id:
+            return False
+        try:
+            self.session_db.replace_session(
+                self.conv_id,
+                self.messages,
+                title=title,
+                model=self.model,
+                cwd=self.workspace,
+                usage=usage or self.usage_snapshot(),
+            )
+            return True
+        except Exception as exc:
+            logger.warning("Session database sync failed: %s", exc)
             return False
 
     def _reconcile_uncertain_tool_calls(self):
@@ -628,6 +882,8 @@ class Agent:
             self.memory_manager.close()
             self.skill_usage.close()
             self.mcp.close_all()
+            if self.session_db is not None:
+                self.session_db.close()
     
     def compress_messages(self, force=False, keep_tokens=None):
         """Summarize old complete turns and keep recent turns verbatim."""

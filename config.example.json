@@ -41,6 +41,23 @@
     "enabled": true,
     "path": "tasks/task_checkpoints.sqlite3"
   },
+  "sessions": {
+    "enabled": true,
+    "path": "data/sierra.sqlite3",
+    "recall": {
+      "enabled": true,
+      "limit": 3,
+      "max_context_chars": 3000,
+      "max_snippet_chars": 700
+    }
+  },
+  "companion": {
+    "enabled": true,
+    "path": "memory/COMPANION_STATE.json",
+    "review_interval": 10,
+    "review_max_chars": 16000,
+    "max_threads": 8
+  },
   "skills": {
     "disabled": [],
     "compact_categories": [],

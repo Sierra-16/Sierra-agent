@@ -46,6 +46,8 @@ def make_agent(model_key):
         memory_config=resolve_memory_config(config),
         task_config=config.get("tasks", {}),
         skill_config=config.get("skills", {}),
+        session_config=config.get("sessions", {}),
+        companion_config=config.get("companion", {}),
         workspace=os.getcwd(),
         sierra_dir=sierra_dir,
         permission_config=config.get("permissions", {}),

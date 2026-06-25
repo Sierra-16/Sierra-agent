@@ -72,6 +72,21 @@ export interface ServerEvent {
   cwd?: string;
   recent?: { id: string; title: string } | null;
   convs?: { id: string; title: string }[];
+  sessions?: {
+    id: string;
+    title?: string;
+    updated_at?: number;
+    message_count?: number;
+  }[];
+  results?: {
+    message_id?: number;
+    session_id: string;
+    role: string;
+    snippet?: string;
+    content?: string;
+    created_at?: number;
+    title?: string;
+  }[];
   models?: { key: string; name: string; active?: boolean }[];
   skills?: SkillSummary[];
   errors?: string[];

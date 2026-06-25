@@ -163,7 +163,7 @@ export function useMainApp(gw: Gateway): MainApp {
         case "/help":
           appendMessage({
             role: "system",
-            text: "命令: /help  /quit  /new  /list  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
+            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /companion  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
           });
           break;
         case "/new":
@@ -172,6 +172,29 @@ export function useMainApp(gw: Gateway): MainApp {
           setUsage((prev) => ({ ...prev, context: 0, context_estimated: false }));
           break;
         case "/list": gw.send({ cmd: "list" }); break;
+        case "/sessions":
+          setBusy(true);
+          setStatusText("reading sessions");
+          gw.send({ cmd: "sessions", limit: 20 });
+          break;
+        case "/session-search":
+          if (!argument) {
+            appendMessage({ role: "system", text: "用法: /session-search <关键词>" });
+            break;
+          }
+          setBusy(true);
+          setStatusText("searching sessions");
+          gw.send({ cmd: "session_search", query: argument, limit: 10 });
+          break;
+        case "/session-load":
+          if (!argument) {
+            appendMessage({ role: "system", text: "用法: /session-load <session_id>" });
+            break;
+          }
+          setBusy(true);
+          setStatusText("loading session");
+          gw.send({ cmd: "session_load", id: argument });
+          break;
         case "/reset":
           gw.send({ cmd: "new" }); setMessages([]); setLastQuery(""); resetLiveOutput();
           setTaskPlan(null); setPendingTaskRecovery(null);
@@ -192,6 +215,11 @@ export function useMainApp(gw: Gateway): MainApp {
           setBusy(true);
           setStatusText("reading memory");
           gw.send({ cmd: "memory" });
+          break;
+        case "/companion":
+          setBusy(true);
+          setStatusText("reading companion state");
+          gw.send({ cmd: "companion" });
           break;
         case "/memory-search":
           if (!argument) {
@@ -434,6 +462,15 @@ export function useMainApp(gw: Gateway): MainApp {
         case "memory_saved":
           setStatusText(`remembered ${ev.count || 1}`);
           break;
+        case "companion_check":
+          setStatusText("updating companion state");
+          break;
+        case "companion_updated":
+          setStatusText("companion state updated");
+          break;
+        case "history_recall":
+          setStatusText(`recalled ${ev.count || 1} history`);
+          break;
         case "plan_updated":
           setTaskPlan(ev.task || null);
           setStatusText("plan updated");
@@ -571,8 +608,37 @@ export function useMainApp(gw: Gateway): MainApp {
         case "convs":
           appendMessage({ role: "system", text: "历史对话:\n" + (ev.convs || []).map((c: any, i: number) => `  [${i + 1}] ${c.title}`).join("\n") });
           break;
+        case "sessions":
+          appendMessage({ role: "system", text: ev.text || "暂无历史会话。" });
+          setStatusText("");
+          setBusy(false);
+          break;
+        case "session_search":
+          appendMessage({ role: "system", text: ev.text || "没有找到相关历史会话。" });
+          setStatusText("");
+          setBusy(false);
+          break;
+        case "session_loaded":
+          setStatusText("");
+          setBusy(false);
+          if (ev.usage) setUsage(ev.usage);
+          if (ev.task !== undefined) setTaskPlan(ev.task || null);
+          if (ev.success) {
+            setMessages([]);
+            setLastQuery(ev.title || "");
+            resetLiveOutput();
+            appendMessage({ role: "system", text: ev.text || "已加载历史会话。" });
+          } else {
+            appendMessage({ role: "error", text: ev.text || "加载历史会话失败。" });
+          }
+          break;
         case "memory":
           appendMessage({ role: "system", text: ev.text || "暂无记忆" });
+          setBusy(false);
+          break;
+        case "companion":
+          appendMessage({ role: "system", text: ev.text || "暂无陪伴状态。" });
+          setStatusText("");
           setBusy(false);
           break;
         case "memory_search":

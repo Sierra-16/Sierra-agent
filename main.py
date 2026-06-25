@@ -38,6 +38,8 @@ def main():
         memory_config=resolve_memory_config(config),
         task_config=config.get("tasks", {}),
         skill_config=config.get("skills", {}),
+        session_config=config.get("sessions", {}),
+        companion_config=config.get("companion", {}),
     )
 
     # ── 欢迎横幅 ──
@@ -143,10 +145,14 @@ def _handle_command(cmd, agent):
 /new        新对话
 /list       对话列表
 /load <n>   加载第 n 个对话
+/sessions   历史会话库
+/session-search <关键词> 搜索历史会话
+/session-load <id> 加载历史会话
 /reset      清空
 /compress   压缩上下文
 /task       查看当前任务计划
 /task-cancel 放弃当前任务
+/companion 查看陪伴状态
 /skills     查看技能索引与就绪状态
 /skills-reload 重新扫描技能包
 /skills-stats 查看技能使用统计
@@ -175,6 +181,38 @@ def _handle_command(cmd, agent):
             _auto_save(agent)
             agent.load_conversation(arg)
             print(f"✅ 已加载: {arg}")
+    elif cmd == "/sessions":
+        sessions = agent.list_sessions(limit=20)
+        if not sessions:
+            print("暂无历史会话")
+        for i, session in enumerate(sessions, 1):
+            print(
+                f"  [{i}] {session.get('id', '')} · "
+                f"{session.get('message_count', 0)} messages · "
+                f"{session.get('title') or '(untitled)'}"
+            )
+    elif cmd.startswith("/session-search "):
+        query = cmd.split(" ", 1)[1].strip()
+        results = agent.search_sessions(query, limit=10)
+        if not results:
+            print("没有找到相关历史会话")
+        for result in results:
+            snippet = " ".join(str(result.get("snippet") or result.get("content") or "").split())
+            if len(snippet) > 220:
+                snippet = snippet[:220] + "..."
+            print(
+                f"{result.get('session_id', '')} · {result.get('role', '?')}\n"
+                f"  {result.get('title') or '(untitled)'}\n"
+                f"  {snippet}"
+            )
+    elif cmd.startswith("/session-load "):
+        session_id = cmd.split(" ", 1)[1].strip()
+        _auto_save(agent)
+        result = agent.load_session(session_id)
+        if result.get("ok"):
+            print(f"✅ 已加载历史会话: {session_id}")
+        else:
+            print(f"❌ {result.get('error', '加载历史会话失败')}")
     elif cmd == "/reset":
         agent.reset()
         agent.conv_id = None
@@ -210,6 +248,8 @@ def _handle_command(cmd, agent):
         else:
             agent.abandon_task(task["id"])
             print("已放弃当前任务")
+    elif cmd == "/companion":
+        print(agent.companion_status().get("text", "暂无陪伴状态。"))
     elif cmd == "/skills":
         _print_skills(agent.skill_summaries(include_unavailable=True))
     elif cmd == "/skills-reload":

@@ -24,6 +24,7 @@ export const HelpHint: React.FC<HelpHintProps> = ({ theme, cols }) => {
     ["/compress", "压缩上下文"],
     ["/task", "查看当前任务计划"],
     ["/task-cancel", "放弃当前任务"],
+    ["/companion", "查看陪伴状态"],
     ["/memory", "查看记忆"],
     ["/memory-search <问题>", "语义搜索历史记忆"],
     ["/memory-forget <ID>", "删除指定向量记忆"],
