@@ -8,13 +8,21 @@ ensure_utf8_stdio()
 from aiagent.server import run_server
 from aiagent.agent import Agent
 from aiagent.memory.config import resolve_memory_config
-import json
+from aiagent.config_validation import (
+    StartupConfigError,
+    format_config_issues,
+    load_and_validate_config,
+    validate_model_config,
+)
 import os
 
 config_path = os.path.join(os.path.dirname(__file__), "config.json")
 sierra_dir = os.path.dirname(config_path)
-with open(config_path, "r", encoding="utf-8") as f:
-    config = json.load(f)
+try:
+    config = load_and_validate_config(config_path)
+except StartupConfigError as exc:
+    print(format_config_issues(exc.issues), file=sys.stderr)
+    raise SystemExit(2)
 
 workspace = os.environ.get("SIERRA_WORKSPACE")
 if workspace:
@@ -24,6 +32,7 @@ if workspace:
         pass
 
 def make_agent(model_key):
+    validate_model_config(config, model_key)
     model_cfg = config["models"][model_key]
     return Agent(
         model=model_cfg["name"],

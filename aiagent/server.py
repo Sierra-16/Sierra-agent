@@ -12,6 +12,11 @@ from .encoding import ensure_utf8_stdio
 ensure_utf8_stdio()
 
 from .agent import Agent
+from .config_validation import (
+    StartupConfigError,
+    format_config_issues,
+    validate_model_config,
+)
 from .safety import sanitize_arguments
 
 
@@ -454,6 +459,14 @@ def run_server(
                 stdout(json.dumps({
                     "type": "error",
                     "text": f"Unknown model: {model_key}",
+                }, ensure_ascii=False))
+                continue
+            try:
+                validate_model_config(config, model_key)
+            except StartupConfigError as exc:
+                stdout(json.dumps({
+                    "type": "error",
+                    "text": format_config_issues(exc.issues),
                 }, ensure_ascii=False))
                 continue
 

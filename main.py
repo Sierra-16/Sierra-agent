@@ -5,11 +5,21 @@ ensure_utf8_stdio()
 from aiagent.agent import Agent
 from aiagent.tools.memory_tool import store as memory_store
 from aiagent.memory.config import resolve_memory_config
+from aiagent.config_validation import (
+    StartupConfigError,
+    format_config_issues,
+    load_and_validate_config,
+)
 import os
-import json
+import sys
 
-with open("config.json", "r", encoding="utf-8") as f:
-    config = json.load(f)
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+
+try:
+    config = load_and_validate_config(CONFIG_PATH)
+except StartupConfigError as exc:
+    print(format_config_issues(exc.issues), file=sys.stderr)
+    raise SystemExit(2)
 
 LINE = "─" * 54
 
