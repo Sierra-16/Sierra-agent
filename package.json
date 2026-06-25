@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "signal-exit": "^4.1.0"
+  }
+}

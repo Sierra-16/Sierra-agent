@@ -1,0 +1,191 @@
+{
+  "memories": [
+    {
+      "key": "guilin_food_trip",
+      "user": "我去桂林三天不想跑景点，只想吃本地小店，行程按纯吃来安排。",
+      "assistant": "记住了：桂林三天以米粉、油茶、啤酒鱼和街巷小吃为主，不安排景点打卡。"
+    },
+    {
+      "key": "guilin_scenery_trip",
+      "user": "桂林旅行我更看重山水，想去漓江、遇龙河和龙脊梯田。",
+      "assistant": "桂林自然风光行程优先漓江、遇龙河与龙脊梯田，并减少餐饮停留时间。"
+    },
+    {
+      "key": "python_only_frontend_help",
+      "user": "我目前只会 Python，涉及前端或 Python 以外的部分由你来写。",
+      "assistant": "以后 Python 部分会尽量带你完成，TypeScript、React 和脚本等部分我直接处理。"
+    },
+    {
+      "key": "guided_agent_learning",
+      "user": "我想在开发 Sierra 的过程中学习智能体编写，不要每次都直接把 Python 全部写完。",
+      "assistant": "我会先解释目标和接口，让你写关键 Python 代码，再检查、测试和讲解。"
+    },
+    {
+      "key": "dangerous_tool_confirmation",
+      "user": "Sierra 执行中高风险操作前都要询问，用户按 y 或 n 确认。",
+      "assistant": "权限策略将中风险和高风险工具设为执行前确认，并记录审计日志。"
+    },
+    {
+      "key": "mcp_transport_config",
+      "user": "Sierra 需要支持 MCP，既能连接本地 stdio 服务，也能连接远程 streamable HTTP 服务。",
+      "assistant": "MCP 管理器会读取 config.json 的 mcpServers，并把远程工具注册为模型可调用工具。"
+    },
+    {
+      "key": "context_token_display",
+      "user": "TUI 的 token 数不要显示累计消耗，要显示当前上下文占模型窗口多少。",
+      "assistant": "状态栏改为 current/context_window 和百分比，帮助判断何时需要压缩上下文。"
+    },
+    {
+      "key": "model_switch_command",
+      "user": "加入 /model 命令，列出 JSON 里配置的模型，用上下键选择并回车切换。",
+      "assistant": "模型选择器会展示可用模型，确认后更新当前会话使用的模型。"
+    },
+    {
+      "key": "companion_personality",
+      "user": "Sierra 是陪伴智能体，希望她温柔、有自己的判断，像森林精灵但不要过度角色扮演。",
+      "assistant": "人格保持温暖、好奇和独立，在认真协作与轻松陪伴之间自然切换。"
+    },
+    {
+      "key": "sauced_yakitori",
+      "user": "我吃烧鸟更喜欢酱烧，不太喜欢只有盐味的。",
+      "assistant": "以后推荐烧鸟店或点单时优先酱烧鸡腿、鸡肉丸和葱鸡串。"
+    },
+    {
+      "key": "dragon_nest_movies",
+      "user": "我喜欢龙之谷的动画电影，尤其是破晓奇兵和精灵王座。",
+      "assistant": "记住你偏爱龙之谷世界观的动画电影，之后可以沿这个方向推荐作品。"
+    },
+    {
+      "key": "hailing_island_drive",
+      "user": "去海陵岛我想自驾慢慢玩，住海边，不要每天赶很多地方。",
+      "assistant": "海陵岛行程按自驾慢游设计，减少换酒店和跨区域往返。"
+    },
+    {
+      "key": "periodic_memory_review",
+      "user": "长期记忆不要每轮都调用模型审查，参考 Hermes 每十轮左右集中判断一次。",
+      "assistant": "后台记忆审查改为按轮数定期触发，没有长期价值的信息就不写入。"
+    },
+    {
+      "key": "interactive_planning",
+      "user": "智能体做计划时应该能暂停，让我从选项中选择或者补充别的需求。",
+      "assistant": "request_user_input 工具允许模型在循环内等待选择，然后带着答案继续同一轮推理。"
+    },
+    {
+      "key": "vector_embedding_model",
+      "user": "Sierra 的语义记忆使用通义千问的 text-embedding-v4，向量维度设为 1024。",
+      "assistant": "嵌入接口采用 OpenAI 兼容协议，向量保存在本地 SQLite 数据库。"
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01_guilin_food",
+      "query": "还记得我去桂林更想怎么玩吗？我不想把时间花在景点上。",
+      "relevant": ["guilin_food_trip"]
+    },
+    {
+      "id": "q02_guilin_scenery",
+      "query": "我之前说过桂林哪些自然风光最重要？",
+      "relevant": ["guilin_scenery_trip"]
+    },
+    {
+      "id": "q03_frontend_help",
+      "query": "项目碰到 React 和 TypeScript 时我们怎么分工？",
+      "relevant": ["python_only_frontend_help"]
+    },
+    {
+      "id": "q04_learning_style",
+      "query": "你应该怎样带着我学智能体开发，而不是替我包办？",
+      "relevant": ["guided_agent_learning"]
+    },
+    {
+      "id": "q05_permissions",
+      "query": "删除文件或执行有风险命令之前应该走什么流程？",
+      "relevant": ["dangerous_tool_confirmation"]
+    },
+    {
+      "id": "q06_mcp",
+      "query": "外部工具服务器有哪些连接方式，配置从哪里读取？",
+      "relevant": ["mcp_transport_config"]
+    },
+    {
+      "id": "q07_context_tokens",
+      "query": "终端底部的 token 指标应该表示本轮累计花费吗？",
+      "relevant": ["context_token_display"]
+    },
+    {
+      "id": "q08_model_switch",
+      "query": "我想在终端里用键盘换一个已经配置好的大模型。",
+      "relevant": ["model_switch_command"]
+    },
+    {
+      "id": "q09_personality",
+      "query": "Sierra 陪我聊天和工作时应该保持怎样的性格？",
+      "relevant": ["companion_personality"]
+    },
+    {
+      "id": "q10_yakitori",
+      "query": "下次吃日式烤鸡串，按我的口味该优先点什么味道？",
+      "relevant": ["sauced_yakitori"]
+    },
+    {
+      "id": "q11_movies",
+      "query": "我喜欢哪两部龙之谷动画？",
+      "relevant": ["dragon_nest_movies"]
+    },
+    {
+      "id": "q12_hailing",
+      "query": "给我安排海陵岛旅行时，节奏和交通方式有什么偏好？",
+      "relevant": ["hailing_island_drive"]
+    },
+    {
+      "id": "q13_review_interval",
+      "query": "怎样降低自动判断长期记忆造成的模型调用开销？",
+      "relevant": ["periodic_memory_review"]
+    },
+    {
+      "id": "q14_planning_input",
+      "query": "模型制定方案到一半需要我做决定时，怎样继续同一轮交互？",
+      "relevant": ["interactive_planning"]
+    },
+    {
+      "id": "q15_embedding",
+      "query": "现在语义记忆具体用哪个向量模型和多少维？",
+      "relevant": ["vector_embedding_model"]
+    },
+    {
+      "id": "q16_learning_multi",
+      "query": "考虑到我只熟悉 Python，你要怎么一边推进项目一边让我学会写智能体？",
+      "relevant": ["python_only_frontend_help", "guided_agent_learning"]
+    },
+    {
+      "id": "q17_guilin_food_hard_negative",
+      "query": "桂林三日行程不要漓江和梯田，重点找当地人吃饭的小馆子。",
+      "relevant": ["guilin_food_trip"]
+    },
+    {
+      "id": "q18_companion_planning",
+      "query": "作为陪伴型助手，你既要有自己的判断，也要在关键选择上问我。",
+      "relevant": ["companion_personality", "interactive_planning"]
+    },
+    {
+      "id": "n01_weather",
+      "query": "明天北京会不会下雨，最高温度是多少？",
+      "relevant": []
+    },
+    {
+      "id": "n02_basketball",
+      "query": "昨晚 NBA 总决赛的比分和得分王是谁？",
+      "relevant": []
+    },
+    {
+      "id": "n03_gardening",
+      "query": "阳台种番茄应该多久浇一次水，什么时候施肥？",
+      "relevant": []
+    },
+    {
+      "id": "n04_finance",
+      "query": "请解释公司差旅报销和增值税发票的处理规则。",
+      "relevant": []
+    }
+  ]
+}

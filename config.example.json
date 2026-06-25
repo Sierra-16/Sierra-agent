@@ -1,0 +1,112 @@
+{
+  "permissions": {
+    "allow": [
+      "calculator",
+      "get_time",
+      "list_directory",
+      "search_files",
+      "skills_list",
+      "skill_view",
+      "skill_render_template",
+      "skill_reload",
+      "skill_usage_stats",
+      "request_user_input",
+      "update_plan",
+      "get_plan",
+      "resolve_task_execution"
+    ],
+    "ask": [
+      "read_file",
+      "write_file",
+      "web_fetch",
+      "web_search",
+      "save_memory",
+      "delete_memory",
+      "memory_forget",
+      "memory_clear",
+      "powershell",
+      "skill_run_script",
+      "skill_manage",
+      "mcp__*"
+    ],
+    "deny": []
+  },
+  "audit": {
+    "enabled": true,
+    "path": "logs/tool_audit.jsonl",
+    "max_bytes": 2097152,
+    "backup_count": 3
+  },
+  "tasks": {
+    "enabled": true,
+    "path": "tasks/task_checkpoints.sqlite3"
+  },
+  "skills": {
+    "disabled": [],
+    "compact_categories": [],
+    "active_environments": [],
+    "description_max_chars": 280,
+    "telemetry": {
+      "enabled": true,
+      "path": "logs/skill_usage.sqlite3",
+      "store_queries": true,
+      "max_query_chars": 1000
+    }
+  },
+  "models": {
+    "deepseek": {
+      "name": "deepseek-chat",
+      "base_url": "https://api.deepseek.com",
+      "api_key": "YOUR_DEEPSEEK_API_KEY",
+      "max_tokens": 8192,
+      "temperature": 0.7,
+      "context_window": 128000
+    },
+    "qwen": {
+      "name": "qwen-plus",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "YOUR_QWEN_API_KEY",
+      "max_tokens": 8192,
+      "temperature": 0.7,
+      "context_window": 128000
+    }
+  },
+  "active_model": "deepseek",
+  "search": {
+    "backend": "bocha",
+    "api_key": "YOUR_SEARCH_API_KEY"
+  },
+  "memory": {
+    "max_memory_chars": 2200,
+    "max_user_chars": 1375,
+    "review_interval": 10,
+    "review_max_chars": 16000,
+    "vector": {
+      "enabled": true,
+      "path": "memory/vector_memory.sqlite3",
+      "scope": "workspace",
+      "max_records": 5000,
+      "recall_min_score": 0.35,
+      "max_turn_chars": 6000,
+      "min_turn_chars": 12,
+      "embedding": {
+        "provider": "openai_compatible",
+        "credentials_model": "qwen",
+        "model": "text-embedding-v4",
+        "dimensions": 1024,
+        "batch_size": 10,
+        "timeout": 20
+      }
+    }
+  },
+  "mcpServers": {
+    "example-http-mcp": {
+      "type": "streamablehttp",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_TOKEN"
+      },
+      "enabled": false
+    }
+  }
+}

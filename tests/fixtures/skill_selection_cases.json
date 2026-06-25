@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {
+      "id": "travel-plan",
+      "query": "帮我规划一份桂林三天纯美食旅行路线",
+      "expected_skills": ["travel-planning"]
+    },
+    {
+      "id": "memory-curation",
+      "query": "整理一下你对我的长期记忆，删掉重复和过时内容",
+      "expected_skills": ["memory-curation"]
+    },
+    {
+      "id": "code-review",
+      "query": "审查这次代码修改，重点找行为回归和缺少的测试",
+      "expected_skills": ["code-review"]
+    },
+    {
+      "id": "architecture-diagram",
+      "query": "把 Sierra 的 Agent、记忆、MCP 和 TUI 画成一张架构图",
+      "expected_skills": ["architecture-diagram"]
+    },
+    {
+      "id": "arxiv-research",
+      "query": "查找并总结最近关于长期记忆智能体的 arXiv 论文",
+      "expected_skills": ["arxiv"]
+    },
+    {
+      "id": "web-research",
+      "query": "对比三家向量数据库的官方资料并给出有来源的结论",
+      "expected_skills": ["web-research"]
+    },
+    {
+      "id": "workspace-organizer",
+      "query": "帮我整理当前工作区的临时文件和重复输出",
+      "expected_skills": ["workspace-organizer"]
+    },
+    {
+      "id": "decision-support",
+      "query": "我在本地向量库和云向量库之间犹豫，帮我分析取舍",
+      "expected_skills": ["decision-support"]
+    },
+    {
+      "id": "companion-dialogue",
+      "query": "今天有点累，先陪我聊一会儿，不需要解决问题",
+      "expected_skills": ["companion-dialogue"]
+    },
+    {
+      "id": "github-pr",
+      "query": "帮我准备提交并创建一个 GitHub Pull Request",
+      "expected_skills": ["github-pr-workflow"]
+    }
+  ]
+}

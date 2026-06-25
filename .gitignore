@@ -1,0 +1,53 @@
+# Local configuration and secrets
+.env
+.env.*
+config.json
+config.local.json
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Node dependencies and generated output
+node_modules/
+tui/node_modules/
+dist/
+build/
+!tui/packages/sierra-ink/dist/
+!tui/packages/sierra-ink/dist/entry-exports.js
+
+# Runtime data
+conversations/
+logs/
+tasks/*.sqlite3
+tasks/*.sqlite3-wal
+tasks/*.sqlite3-shm
+memory/USER.md
+memory/MEMORY.md
+memory/*.sqlite3
+memory/*.sqlite3-wal
+memory/*.sqlite3-shm
+tui/memory/USER.md
+tui/memory/MEMORY.md
+
+# Generated local notes from agent runs
+/*.md
+!README.md
+/*.txt
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Reference source used for learning, not part of Sierra
+hermes-agent-temp/

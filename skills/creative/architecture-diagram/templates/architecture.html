@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{title}}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Segoe UI", sans-serif;
+      background: #0b0f0d;
+      color: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: #0b0f0d; }
+    main { width: min(1240px, 100%); margin: 0 auto; padding: 32px 24px 48px; }
+    header { margin-bottom: 24px; }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0; }
+    .subtitle { margin: 0; color: #94a3b8; line-height: 1.6; }
+    .diagram { width: 100%; overflow-x: auto; border: 1px solid #26312b; border-radius: 8px; }
+    .diagram > svg { display: block; width: 100%; min-width: 720px; height: auto; }
+    .notes { margin-top: 24px; color: #cbd5e1; line-height: 1.7; }
+    .notes ul { padding-left: 20px; }
+    code { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>{{title}}</h1>
+      <p class="subtitle">{{subtitle}}</p>
+    </header>
+    <section class="diagram" aria-label="{{title}} architecture diagram">
+{{diagram_svg}}
+    </section>
+    <section class="notes">
+{{notes}}
+    </section>
+  </main>
+</body>
+</html>
