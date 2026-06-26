@@ -66,6 +66,10 @@ class SkillPromptIndex:
             80,
             min(1000, int(config.get("description_max_chars", 280) or 280)),
         )
+        self.max_prompt_chars = max(
+            2500,
+            int(config.get("max_prompt_chars", 9000) or 9000),
+        )
         self.platform = _normalize_platform(
             str(config.get("platform") or sys.platform)
         )
@@ -208,6 +212,7 @@ class SkillPromptIndex:
             tuple(sorted(self.active_environments)),
             self.platform,
             self.description_max_chars,
+            self.max_prompt_chars,
         )
         if cache_key == self._cache_key:
             return self._cache_value
@@ -219,47 +224,71 @@ class SkillPromptIndex:
         if not categories:
             result = ""
         else:
-            lines = []
-            for category in sorted(categories):
-                category_skills = sorted(categories[category], key=lambda item: item.name)
-                if _category_is_compact(category, self.compact_categories):
-                    names = ", ".join(skill.name for skill in category_skills)
-                    lines.append(f"  [category: {category}] [names only]: {names}")
-                    continue
-                description = _category_description(category_skills)
-                lines.append(
-                    f"  [category: {category}]" + (f" {description}" if description else "")
-                )
-                for skill in category_skills:
-                    skill_description = _single_line(skill.description)
-                    if len(skill_description) > self.description_max_chars:
-                        skill_description = skill_description[: self.description_max_chars - 3] + "..."
-                    lines.append(f"    - {skill.name}: {skill_description}")
+            auto_compact: set[str] = set()
 
-            compact_note = ""
-            if self.compact_categories:
-                compact_note = (
-                    "\nCategories marked [names only] remain loadable; their descriptions are "
-                    "omitted to reduce context usage."
+            def render(auto_compact_categories: set[str]) -> str:
+                lines = []
+                for category in sorted(categories):
+                    category_skills = sorted(categories[category], key=lambda item: item.name)
+                    if (
+                        _category_is_compact(category, self.compact_categories)
+                        or category in auto_compact_categories
+                    ):
+                        names = ", ".join(skill.name for skill in category_skills)
+                        lines.append(f"  [category: {category}] [names only]: {names}")
+                        continue
+                    description = _category_description(category_skills)
+                    lines.append(
+                        f"  [category: {category}]" + (f" {description}" if description else "")
+                    )
+                    for skill in category_skills:
+                        skill_description = _single_line(skill.description)
+                        if len(skill_description) > self.description_max_chars:
+                            skill_description = skill_description[: self.description_max_chars - 3] + "..."
+                        lines.append(f"    - {skill.name}: {skill_description}")
+
+                compacted = bool(self.compact_categories or auto_compact_categories)
+                compact_note = ""
+                if compacted:
+                    compact_note = (
+                        "\nCategories marked [names only] remain loadable; their descriptions are "
+                        "omitted to reduce context usage."
+                    )
+                return (
+                    "# Skills (mandatory)\n"
+                    "Before replying or calling any non-Skill tool, scan the compact index below. "
+                    "If a skill matches or is even partially relevant, you MUST call "
+                    "skill_view(name='<exact-skill-name>') first and follow its instructions. "
+                    "Category labels are navigation headings, never Skill names. Only identifiers "
+                    "listed after '-' or inside a [names only] list are valid Skill names. "
+                    "Do not call terminal, PowerShell, file, web, or MCP tools before loading a "
+                    "relevant Skill. "
+                    "Never skip a matching Skill because the task seems easy or because a general "
+                    "tool could handle it; the Skill defines Sierra's preferred workflow and quality checks. "
+                    "The index contains metadata only; full instructions and linked resources use "
+                    "progressive disclosure. Only proceed without loading a skill when none are relevant.\n"
+                    "<available_skills>\n"
+                    + "\n".join(lines)
+                    + "\n</available_skills>"
+                    + compact_note
                 )
-            result = (
-                "# Skills (mandatory)\n"
-                "Before replying or calling any non-Skill tool, scan the compact index below. "
-                "If a skill matches or is even partially relevant, you MUST call "
-                "skill_view(name='<exact-skill-name>') first and follow its instructions. "
-                "Category labels are navigation headings, never Skill names. Only identifiers "
-                "listed after '-' or inside a [names only] list are valid Skill names. "
-                "Do not call terminal, PowerShell, file, web, or MCP tools before loading a "
-                "relevant Skill. "
-                "Never skip a matching Skill because the task seems easy or because a general "
-                "tool could handle it; the Skill defines Sierra's preferred workflow and quality checks. "
-                "The index contains metadata only; full instructions and linked resources use "
-                "progressive disclosure. Only proceed without loading a skill when none are relevant.\n"
-                "<available_skills>\n"
-                + "\n".join(lines)
-                + "\n</available_skills>"
-                + compact_note
-            )
+
+            result = render(auto_compact)
+            if len(result) > self.max_prompt_chars:
+                category_lengths = []
+                for category, category_skills in categories.items():
+                    if _category_is_compact(category, self.compact_categories):
+                        continue
+                    described = render(auto_compact)
+                    auto_compact.add(category)
+                    compacted = render(auto_compact)
+                    auto_compact.remove(category)
+                    category_lengths.append((len(described) - len(compacted), category))
+                for _, category in sorted(category_lengths, reverse=True):
+                    if len(result) <= self.max_prompt_chars:
+                        break
+                    auto_compact.add(category)
+                    result = render(auto_compact)
 
         self._cache_key = cache_key
         self._cache_value = result

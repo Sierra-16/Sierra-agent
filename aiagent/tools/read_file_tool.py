@@ -1,34 +1,48 @@
-from .registry import registry
 import json
+
+from .path_context import resolve_workspace_path
+from .registry import registry
+
+
 READ_FILE_SCHEMA = {
     "type": "object",
     "properties": {
         "file_path": {
             "type": "string",
-            "description": "要读取的文件路径，如 'e:/xxxx/main.py'"
+            "description": "Path to read. Relative paths resolve under the user workspace.",
         }
     },
-    "required": ["file_path"]
+    "required": ["file_path"],
 }
 
+
 def read_file(file_path: str) -> str:
+    resolved_path = resolve_workspace_path(file_path)
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(resolved_path, "r", encoding="utf-8") as f:
             content = f.read()
-        # 太长截断
-        if len(content) > 5000:
-            content = content[:5000] + f"\n...(内容已截断，共 {len(content)} 字)"
-        return json.dumps({"file_path": file_path, "content": content})
+        original_length = len(content)
+        if original_length > 5000:
+            content = content[:5000] + f"\n...(content truncated, total {original_length} chars)"
+        return json.dumps(
+            {
+                "file_path": resolved_path,
+                "requested_path": file_path,
+                "content": content,
+            },
+            ensure_ascii=False,
+        )
     except FileNotFoundError:
-        return json.dumps({"error": f"文件不存在: {file_path}"})
+        return json.dumps({"error": f"File not found: {resolved_path}"}, ensure_ascii=False)
     except PermissionError:
-        return json.dumps({"error": f"没有权限读取: {file_path}"})
+        return json.dumps({"error": f"Permission denied: {resolved_path}"}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)})
-    
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
 registry.register(
     name="read_file",
-    description="读取指定路径的文件内容",
+    description="Read a text file. Relative paths resolve under the user workspace.",
     parameters=READ_FILE_SCHEMA,
-    handler=read_file
+    handler=read_file,
 )

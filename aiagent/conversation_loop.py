@@ -1,6 +1,10 @@
 import json
 import time
 
+from .context_budget import (
+    fit_messages_to_budget,
+    prepare_conversation_messages_for_request,
+)
 from .safety import sanitize_arguments, sanitize_text
 from .token_utils import estimate_tokens
 from .turn_context import build_memory_context, build_turn_context
@@ -367,8 +371,28 @@ def run_conversation_loop(
             return False, "MCP tool returned isError=true"
         return True, ""
 
+    def _prepare_request_messages():
+        return prepare_conversation_messages_for_request(
+            agent.messages,
+            old_tool_result_max_chars=getattr(
+                agent,
+                "old_tool_result_max_chars",
+                2400,
+            ),
+            recent_tool_result_max_chars=getattr(
+                agent,
+                "recent_tool_result_max_chars",
+                12000,
+            ),
+            recent_message_count=getattr(
+                agent,
+                "recent_tool_result_message_count",
+                8,
+            ),
+        )
+
     on_delta.state = {"in_reasoning": False}
-    compaction_attempted = False
+    compaction_attempts = 0
 
     for _ in range(agent.max_iterations):
         tools = agent.tools.get_definitions()
@@ -380,17 +404,20 @@ def run_conversation_loop(
                 task_context = ""
         turn_context.system_prompt = getattr(agent, "system_prompt", "")
         turn_context.task_context = task_context
-        preflight_messages = turn_context.build_messages(agent.messages)
+        request_messages, request_prepare_stats = _prepare_request_messages()
+        preflight_messages = turn_context.build_messages(request_messages)
         preflight_tokens = estimate_tokens(preflight_messages, tools=tools)
-        if (
-            preflight_tokens > agent.max_compress_tokens
-            and not compaction_attempted
+        while (
+            getattr(agent, "compression_enabled", True)
+            and preflight_tokens > agent.max_compress_tokens
+            and compaction_attempts < getattr(agent, "compression_max_passes", 1)
         ):
-            compaction_attempted = True
+            compaction_attempts += 1
+            before_compaction_tokens = preflight_tokens
             if on_status:
                 on_status({
                     "type": "context_compaction_start",
-                    "before_tokens": preflight_tokens,
+                    "before_tokens": before_compaction_tokens,
                 })
             else:
                 print("\n⚠️ 上下文过长，正在压缩...")
@@ -416,12 +443,14 @@ def run_conversation_loop(
                 compaction_result = {"compressed": False, "reason": "unknown"}
 
             if compaction_result.get("compressed"):
-                compacted_preflight = turn_context.build_messages(agent.messages)
+                request_messages, request_prepare_stats = _prepare_request_messages()
+                compacted_preflight = turn_context.build_messages(request_messages)
                 after_tokens = estimate_tokens(compacted_preflight, tools=tools)
+                preflight_tokens = after_tokens
                 if on_status:
                     on_status({
                         "type": "context_compaction_done",
-                        "before_tokens": preflight_tokens,
+                        "before_tokens": before_compaction_tokens,
                         "after_tokens": after_tokens,
                         "summarized_messages": compaction_result.get(
                             "summarized_messages", 0
@@ -441,13 +470,39 @@ def run_conversation_loop(
                 if on_status:
                     on_status({
                         "type": event_type,
-                        "before_tokens": preflight_tokens,
+                        "before_tokens": before_compaction_tokens,
                     })
                 else:
                     print("ℹ️ 当前没有可安全压缩的完整历史轮次。")
 
-        api_messages = turn_context.build_messages(agent.messages)
+                break
+
+        request_messages, request_prepare_stats = _prepare_request_messages()
+        api_messages = turn_context.build_messages(request_messages)
         estimated_context_tokens = estimate_tokens(api_messages, tools=tools)
+        context_budget = int(getattr(agent, "context_window", 0) or 0)
+        if context_budget > 0 and estimated_context_tokens > context_budget:
+            api_messages, omitted_messages = fit_messages_to_budget(
+                turn_context.system_messages(),
+                request_messages,
+                tools=tools,
+                max_tokens=context_budget,
+            )
+            trimmed_tokens = estimate_tokens(api_messages, tools=tools)
+            if omitted_messages and on_status:
+                on_status({
+                    "type": "context_budget_trimmed",
+                    "before_tokens": estimated_context_tokens,
+                    "after_tokens": trimmed_tokens,
+                    "omitted_messages": omitted_messages,
+                })
+            estimated_context_tokens = trimmed_tokens
+        if request_prepare_stats.get("truncated_tool_results") and on_status:
+            on_status({
+                "type": "context_tool_results_trimmed",
+                "count": request_prepare_stats.get("truncated_tool_results", 0),
+                "omitted_chars": request_prepare_stats.get("omitted_tool_result_chars", 0),
+            })
         turn_context.estimated_context_tokens = estimated_context_tokens
         response = agent.llm.stream_chat(api_messages, tools, on_delta)
         agent.count_tokens(response["usage"])

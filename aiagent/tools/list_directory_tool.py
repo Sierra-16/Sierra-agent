@@ -1,43 +1,54 @@
-from .registry import registry
 import json
 import os
+
+from .path_context import resolve_workspace_path
+from .registry import registry
+
+
 LIST_DIR_SCHEMA = {
     "type": "object",
     "properties": {
         "dir_path": {
             "type": "string",
-            "description": "要列出的目录路径，不传则列出当前目录"
+            "description": "Directory to list. Relative paths resolve under the user workspace.",
         }
     },
-    "required": []  # 可选参数，不加 required
+    "required": [],
 }
 
+
 def list_directory(dir_path: str = ".") -> str:
+    resolved_dir = resolve_workspace_path(dir_path)
     try:
-        items = os.listdir(dir_path)
+        items = sorted(os.listdir(resolved_dir), key=str.lower)
         files = []
         dirs = []
         for name in items:
-            full = os.path.join(dir_path, name)
+            full = os.path.join(resolved_dir, name)
             if os.path.isdir(full):
                 dirs.append(name + "/")
             else:
                 size = os.path.getsize(full)
                 files.append(f"{name} ({size} bytes)")
-        return json.dumps({
-            "dir_path": os.path.abspath(dir_path),
-            "directories": dirs,
-            "files": files,
-            "total": len(items)
-        })
+        return json.dumps(
+            {
+                "dir_path": resolved_dir,
+                "requested_path": dir_path,
+                "directories": dirs,
+                "files": files,
+                "total": len(items),
+            },
+            ensure_ascii=False,
+        )
     except FileNotFoundError:
-        return json.dumps({"error": f"目录不存在: {dir_path}"})
+        return json.dumps({"error": f"Directory not found: {resolved_dir}"}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
 
 registry.register(
     name="list_directory",
-    description="列出指定目录中的文件和子目录",
+    description="List files and directories. Relative paths resolve under the user workspace.",
     parameters=LIST_DIR_SCHEMA,
-    handler=list_directory
+    handler=list_directory,
 )

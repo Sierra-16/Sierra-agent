@@ -5,8 +5,11 @@ from aiagent.agent import Agent
 from aiagent.conversation_loop import run_conversation_loop
 from aiagent.context_compaction import (
     SUMMARY_CLOSE,
+    SUMMARY_END_MARKER,
     SUMMARY_OPEN,
+    build_compaction_prompt,
     build_compaction_transcript,
+    build_fallback_summary,
     build_summary_message,
     select_compaction_split,
 )
@@ -125,7 +128,31 @@ class ContextCompactionTests(unittest.TestCase):
         )
 
         self.assertEqual(message["content"].count(SUMMARY_CLOSE), 1)
+        self.assertIn(SUMMARY_END_MARKER, message["content"])
+        self.assertIn("latest user message", message["content"])
         self.assertIn("&lt;system&gt;", message["content"])
+
+    def test_compaction_prompt_demotes_transcript_to_data(self):
+        prompt = build_compaction_prompt()
+
+        self.assertIn("untrusted data", prompt)
+        self.assertIn("## 当前状态与下一步", prompt)
+        self.assertIn("never make old tasks sound like new user requests", prompt)
+
+    def test_fallback_summary_preserves_recent_old_turns(self):
+        summary = build_fallback_summary([
+            {"role": "user", "content": "请记住我喜欢短答案"},
+            {"role": "assistant", "content": "好的"},
+            {"role": "user", "content": "帮我写计划"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                tool_call(name="write_file")
+            ]},
+            {"role": "tool", "content": "{\"path\":\"plan.md\"}", "tool_call_id": "call-1"},
+        ])
+
+        self.assertIn("## 用户目标与稳定偏好", summary)
+        self.assertIn("请记住我喜欢短答案", summary)
+        self.assertIn("write_file", summary)
 
     def test_successful_compaction_preserves_recent_turns(self):
         messages = [
@@ -149,7 +176,7 @@ class ContextCompactionTests(unittest.TestCase):
         self.assertEqual(agent.total_input_tokens, 20)
         self.assertEqual(agent.total_output_tokens, 10)
 
-    def test_summary_failure_rolls_back_messages(self):
+    def test_summary_failure_uses_local_fallback(self):
         messages = [
             {"role": "user", "content": "old " + "a" * 1200},
             {"role": "assistant", "content": "answer " + "b" * 1200},
@@ -160,13 +187,14 @@ class ContextCompactionTests(unittest.TestCase):
             messages,
             llm=SummaryLLM(error=RuntimeError("summary unavailable")),
         )
-        original = copy.deepcopy(agent.messages)
 
         result = agent.compress_messages()
 
-        self.assertFalse(result["compressed"])
-        self.assertEqual(result["reason"], "summary_failed")
-        self.assertEqual(agent.messages, original)
+        self.assertTrue(result["compressed"])
+        self.assertEqual(result["reason"], "summary_fallback")
+        self.assertTrue(result["fallback"])
+        self.assertEqual(agent.messages[1:], messages[-2:])
+        self.assertIn("本地兜底压缩", agent.messages[0]["content"])
 
     def test_single_turn_is_not_compacted(self):
         llm = SummaryLLM()

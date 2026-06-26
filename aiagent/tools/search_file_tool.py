@@ -1,39 +1,49 @@
-from .registry import registry
-import json
 import glob
+import json
 import os
+
+from .path_context import resolve_workspace_path
+from .registry import registry
+
 
 SEARCH_FILES_SCHEMA = {
     "type": "object",
     "properties": {
         "pattern": {
             "type": "string",
-            "description": "文件名匹配，如 '*.py' 搜当前目录，'**/*.py' 递归搜所有子目录"
+            "description": "Glob pattern, such as '*.py' or '**/*.py'.",
         },
         "dir_path": {
             "type": "string",
-            "description": "搜索的起始目录，不传则从当前目录开始"
-        }
+            "description": "Base directory. Relative paths resolve under the user workspace.",
+        },
     },
-    "required": ["pattern"]
+    "required": ["pattern"],
 }
 
+
 def search_files(pattern: str, dir_path: str = ".") -> str:
+    resolved_dir = resolve_workspace_path(dir_path)
     try:
-        search_path = os.path.join(dir_path, pattern)
-        matches = glob.glob(search_path, recursive=True)
-        return json.dumps({
-            "pattern": pattern,
-            "dir_path": os.path.abspath(dir_path),
-            "matches": matches,
-            "total": len(matches)
-        })
+        search_path = os.path.join(resolved_dir, pattern)
+        matches = sorted(glob.glob(search_path, recursive=True), key=str.lower)
+        return json.dumps(
+            {
+                "pattern": pattern,
+                "dir_path": resolved_dir,
+                "requested_dir_path": dir_path,
+                "matches": matches,
+                "total": len(matches),
+            },
+            ensure_ascii=False,
+        )
     except Exception as e:
-        return json.dumps({"error": str(e)})
-    
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
 registry.register(
     name="search_files",
-    description="搜索匹配的文件，支持通配符，如 '*.py' 搜当前目录，'**/*.py' 递归搜所有子目录",
+    description="Search files with a glob pattern. Relative base paths resolve under the user workspace.",
     parameters=SEARCH_FILES_SCHEMA,
-    handler=search_files
+    handler=search_files,
 )

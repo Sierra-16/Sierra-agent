@@ -13,7 +13,8 @@ from aiagent.config_validation import (
 import os
 import sys
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+SIERRA_DIR = os.path.dirname(__file__)
+CONFIG_PATH = os.path.join(SIERRA_DIR, "config.json")
 
 try:
     config = load_and_validate_config(CONFIG_PATH)
@@ -26,6 +27,32 @@ LINE = "─" * 54
 
 def main():
     model_cfg = config["models"][config["active_model"]]
+
+    # ── 欢迎横幅 ──
+    logo = "\n".join([
+        " ███████╗██╗███████╗██████╗ ██████╗  █████╗",
+        " ██╔════╝██║██╔════╝██╔══██╗██╔══██╗██╔══██╗",
+        " ███████╗██║█████╗  ██████╔╝██████╔╝███████║",
+        " ╚════██║██║██╔══╝  ██╔══██╗██╔══██╗██╔══██║",
+        " ███████║██║███████╗██║  ██║██║  ██║██║  ██║",
+        " ╚══════╝╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
+    ])
+    print(logo)
+    print(f"\n🤖 模型: {model_cfg['name']}    📂 工作区: {os.getcwd()}")
+    print(LINE)
+    # ── 确认工作区 ──
+    cwd = os.getcwd()
+    print(f"📂 当前工作区: {cwd}")
+    path = input("按 Enter 确认，或输入新路径: ").strip()
+    if path:
+        try:
+            os.chdir(path)
+            print(f"📂 已切换到: {os.getcwd()}")
+        except Exception as e:
+            print(f"❌ 无法切换: {e}")
+            print(f"📂 使用当前目录: {cwd}")
+    print(LINE)
+
     agent = Agent(
         model=model_cfg["name"],
         base_url=model_cfg["base_url"],
@@ -41,33 +68,10 @@ def main():
         session_config=config.get("sessions", {}),
         companion_config=config.get("companion", {}),
         background_config=config.get("background_jobs", {}),
+        context_config=config.get("context", {}),
+        workspace=os.getcwd(),
+        sierra_dir=SIERRA_DIR,
     )
-
-    # ── 欢迎横幅 ──
-    logo = "\n".join([
-        " ███████╗██╗███████╗██████╗ ██████╗  █████╗",
-        " ██╔════╝██║██╔════╝██╔══██╗██╔══██╗██╔══██╗",
-        " ███████╗██║█████╗  ██████╔╝██████╔╝███████║",
-        " ╚════██║██║██╔══╝  ██╔══██╗██╔══██╗██╔══██║",
-        " ███████║██║███████╗██║  ██║██║  ██║██║  ██║",
-        " ╚══════╝╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
-    ])
-    print(logo)
-    print(f"\n🤖 模型: {model_cfg['name']}    📂 工作区: {os.getcwd()}")
-    print(LINE)
-        # ── 确认工作区 ──
-    cwd = os.getcwd()
-    print(f"📂 当前工作区: {cwd}")
-    path = input("按 Enter 确认，或输入新路径: ").strip()
-    if path:
-        try:
-            os.chdir(path)
-            print(f"📂 已切换到: {os.getcwd()}")
-        except Exception as e:
-            print(f"❌ 无法切换: {e}")
-            print(f"📂 使用当前目录: {cwd}")
-    print(LINE)
-
 
     # ── 自动恢复上次对话 ──
     convs = agent.list_conversations()

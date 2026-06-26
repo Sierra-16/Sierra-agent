@@ -535,6 +535,12 @@ export function useMainApp(gw: Gateway): MainApp {
         case "context_compaction_skipped":
           setStatusText("context kept");
           break;
+        case "context_budget_trimmed":
+          setStatusText("context fitted to budget");
+          break;
+        case "context_tool_results_trimmed":
+          setStatusText("tool output trimmed");
+          break;
         case "tool_start": {
           const name = ev.name || "tool";
           setBusy(true);

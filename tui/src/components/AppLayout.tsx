@@ -128,7 +128,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
               statusText={app.statusText}
               contextTokens={app.usage.context}
               contextWindow={app.usage.context_window}
-              contextEstimated={app.usage.context_estimated}
               cwd={app.cwd}
               theme={theme}
             />

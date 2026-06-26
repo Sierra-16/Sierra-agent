@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 
+from .path_context import resolve_workspace_path
 from .registry import registry
 
 
@@ -39,7 +40,7 @@ def powershell(command: str, cwd: str | None = None, timeout: int = 30) -> str:
     if not executable:
         return json.dumps({"error": "未找到 pwsh 或 powershell"}, ensure_ascii=False)
 
-    workdir = os.path.abspath(cwd or os.getcwd())
+    workdir = resolve_workspace_path(cwd or ".")
     if not os.path.isdir(workdir):
         return json.dumps({"error": f"工作目录不存在: {workdir}"}, ensure_ascii=False)
 

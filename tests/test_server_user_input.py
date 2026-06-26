@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import sys
 import unittest
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ class FakeServerAgent:
         self.current_context_tokens = 321
         self.context_window = 1000
         self.context_tokens_estimated = False
+        self.workspace = os.path.join(os.getcwd(), "fake-workspace")
         self.answer = None
         self.closed = False
 
@@ -39,6 +41,22 @@ class FakeServerAgent:
 
 
 class ServerUserInputTests(unittest.TestCase):
+    def test_init_reports_agent_workspace_as_cwd(self):
+        agent = FakeServerAgent()
+        stdin = io.StringIO(json.dumps({"cmd": "init"}) + "\n")
+        output = io.StringIO()
+
+        with (
+            patch.object(sys, "stdin", stdin),
+            patch.object(sys, "stdout", output),
+            patch.object(sys, "__stdout__", output),
+        ):
+            run_server(agent)
+
+        events = [json.loads(line) for line in output.getvalue().splitlines() if line]
+        self.assertEqual(events[0]["type"], "init")
+        self.assertEqual(events[0]["cwd"], agent.workspace)
+
     def test_server_round_trip_resumes_chat(self):
         agent = FakeServerAgent()
         request_id = "input-1234567890ab"
@@ -69,7 +87,7 @@ class ServerUserInputTests(unittest.TestCase):
         self.assertEqual(events[1]["type"], "user_input_result")
         self.assertEqual(events[2]["type"], "done")
         self.assertEqual(events[2]["usage"]["context"], 321)
-        self.assertEqual(events[2]["usage"]["context_window"], 1000)
+        self.assertEqual(events[2]["usage"]["context_window"], 256000)
         self.assertEqual(agent.answer["value"], "postgres")
         self.assertTrue(agent.closed)
 

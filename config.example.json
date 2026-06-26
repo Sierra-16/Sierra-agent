@@ -62,11 +62,24 @@
     "enabled": true,
     "max_history": 100
   },
+  "context": {
+    "enabled": true,
+    "max_prompt_tokens": 120000,
+    "compression_threshold": 0.5,
+    "target_ratio": 0.2,
+    "keep_recent_ratio": 0.25,
+    "max_compression_passes": 3,
+    "transcript_max_chars": 160000,
+    "old_tool_result_max_chars": 2400,
+    "recent_tool_result_max_chars": 12000,
+    "recent_tool_result_message_count": 8
+  },
   "skills": {
     "disabled": [],
     "compact_categories": [],
     "active_environments": [],
     "description_max_chars": 280,
+    "max_prompt_chars": 9000,
     "telemetry": {
       "enabled": true,
       "path": "logs/skill_usage.sqlite3",

@@ -130,6 +130,35 @@ class SkillPromptIndexTests(unittest.TestCase):
 
         self.assertIn("[category: research] Evidence-backed research workflows.", prompt)
 
+    def test_large_prompt_auto_compacts_categories(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        skills = [
+            self.make_skill(
+                temp_dir.name,
+                f"visual-{index}",
+                "creative",
+                description="Long visual workflow description " * 10,
+            )
+            for index in range(8)
+        ]
+        skills.append(
+            self.make_skill(
+                temp_dir.name,
+                "debugger",
+                "development",
+                description="Short debugging workflow",
+            )
+        )
+        index = SkillPromptIndex({"max_prompt_chars": 2600})
+
+        prompt = index.build(skills, available_tools=[])
+
+        self.assertIn("[category: creative] [names only]:", prompt)
+        self.assertIn("visual-0", prompt)
+        self.assertNotIn("Long visual workflow description", prompt)
+        self.assertIn("debugger", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

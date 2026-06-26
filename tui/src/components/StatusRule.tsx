@@ -9,7 +9,6 @@ interface StatusRuleProps {
   statusText: string;
   contextTokens: number;
   contextWindow: number;
-  contextEstimated: boolean;
   cwd: string;
   theme: Theme;
 }
@@ -28,12 +27,6 @@ function truncateStart(value: string, max: number): string {
   return `...${value.slice(value.length - max + 3)}`;
 }
 
-function formatTokenCount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  return Math.max(0, value).toLocaleString();
-}
-
 export const StatusRule: React.FC<StatusRuleProps> = ({
   cols,
   model,
@@ -41,7 +34,6 @@ export const StatusRule: React.FC<StatusRuleProps> = ({
   statusText,
   contextTokens,
   contextWindow,
-  contextEstimated,
   cwd,
   theme,
 }) => {
@@ -49,9 +41,8 @@ export const StatusRule: React.FC<StatusRuleProps> = ({
   const contextPercent = contextWindow > 0
     ? Math.max(0, Math.min(100, Math.round((contextTokens / contextWindow) * 100)))
     : 0;
-  const estimateMark = contextEstimated && contextTokens > 0 ? "~" : "";
   const tokensText = contextWindow > 0
-    ? `ctx ${estimateMark}${formatTokenCount(contextTokens)}/${formatTokenCount(contextWindow)} · ${contextPercent}%`
+    ? `ctx ${contextPercent}%`
     : "ctx --";
   const busyText = busy ? statusText || "working" : "ready";
   const cwdText = truncateStart(cwd || "", Math.max(10, cols - 52));

@@ -20,6 +20,9 @@ from .config_validation import (
 from .safety import sanitize_arguments
 
 
+TUI_CONTEXT_WINDOW = 256_000
+
+
 def run_server(
     agent: Agent,
     config: dict | None = None,
@@ -51,7 +54,7 @@ def run_server(
             stdout(json.dumps({
                 "type": "init",
                 "model": current_agent.llm.model,
-                "cwd": os.getcwd(),
+                "cwd": getattr(current_agent, "workspace", None) or os.getcwd(),
                 "recent": recent,
                 "companion_hint": companion_handoff,
                 "usage": _usage_payload(current_agent),
@@ -638,14 +641,21 @@ def _auto_save(agent: Agent):
 def _usage_payload(agent: Agent) -> dict:
     usage_snapshot = getattr(agent, "usage_snapshot", None)
     if callable(usage_snapshot):
-        return usage_snapshot()
-    return {
-        "input": getattr(agent, "total_input_tokens", 0),
-        "output": getattr(agent, "total_output_tokens", 0),
-        "context": getattr(agent, "current_context_tokens", 0),
-        "context_window": getattr(agent, "context_window", 0),
-        "context_estimated": getattr(agent, "context_tokens_estimated", False),
-    }
+        usage = dict(usage_snapshot() or {})
+    else:
+        usage = {
+            "input": getattr(agent, "total_input_tokens", 0),
+            "output": getattr(agent, "total_output_tokens", 0),
+            "context": getattr(agent, "current_context_tokens", 0),
+            "context_estimated": getattr(agent, "context_tokens_estimated", False),
+        }
+    usage.setdefault("context", getattr(agent, "current_context_tokens", 0))
+    usage.setdefault(
+        "context_estimated",
+        getattr(agent, "context_tokens_estimated", False),
+    )
+    usage["context_window"] = TUI_CONTEXT_WINDOW
+    return usage
 
 
 def _agent_task_status(agent: Agent) -> dict | None:
