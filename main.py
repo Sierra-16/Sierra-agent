@@ -83,6 +83,11 @@ def main():
         print("💡 输入 /help 查看命令    Ctrl+C 退出")
         print(LINE)
 
+    companion_handoff = agent.companion_handoff()
+    if companion_handoff:
+        print(companion_handoff)
+        print(LINE)
+
     recovery_task = agent.task_recovery()
     if recovery_task:
         completed = sum(

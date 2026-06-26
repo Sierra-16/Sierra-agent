@@ -404,6 +404,9 @@ export function useMainApp(gw: Gateway): MainApp {
           setStarted(true);
           if (ev.usage) setUsage(ev.usage);
           if (ev.task !== undefined) setTaskPlan(ev.task || null);
+          if (ev.companion_hint) {
+            appendMessage({ role: "system", text: ev.companion_hint });
+          }
           if (ev.recovery_task) {
             setPendingTaskRecovery(ev.recovery_task);
             setTaskRecoverySelectedIndex(0);
@@ -415,6 +418,9 @@ export function useMainApp(gw: Gateway): MainApp {
           if (ev.title) setLastQuery(ev.title);
           if (ev.usage) setUsage(ev.usage);
           if (ev.task !== undefined) setTaskPlan(ev.task || null);
+          if (ev.companion_hint) {
+            appendMessage({ role: "system", text: ev.companion_hint });
+          }
           if (ev.recovery_task) {
             setPendingTaskRecovery(ev.recovery_task);
             setTaskRecoverySelectedIndex(0);
@@ -467,6 +473,9 @@ export function useMainApp(gw: Gateway): MainApp {
           break;
         case "companion_updated":
           setStatusText("companion state updated");
+          break;
+        case "companion_resume":
+          setStatusText("continuing companion thread");
           break;
         case "history_recall":
           setStatusText(`recalled ${ev.count || 1} history`);

@@ -102,6 +102,15 @@ def run_conversation_loop(
             on_status({"type": "history_recall", "count": len(history_results)})
     except Exception:
         history_context = ""
+    companion_context = ""
+    companion_continuation = getattr(agent, "companion_continuation_context", None)
+    if callable(companion_continuation):
+        try:
+            companion_context = companion_continuation(user_message)
+            if companion_context and on_status:
+                on_status({"type": "companion_resume"})
+        except Exception:
+            companion_context = ""
 
     def on_delta(event):
         if event["type"] == "reasoning":
@@ -442,6 +451,8 @@ def run_conversation_loop(
             preflight_messages.append({"role": "system", "content": recalled_context})
         if history_context:
             preflight_messages.append({"role": "system", "content": history_context})
+        if companion_context:
+            preflight_messages.append({"role": "system", "content": companion_context})
         if task_context:
             preflight_messages.append({"role": "system", "content": task_context})
         preflight_messages.extend(agent.messages)
@@ -491,6 +502,11 @@ def run_conversation_loop(
                         "role": "system",
                         "content": history_context,
                     })
+                if companion_context:
+                    compacted_preflight.append({
+                        "role": "system",
+                        "content": companion_context,
+                    })
                 if task_context:
                     compacted_preflight.append({
                         "role": "system",
@@ -531,6 +547,8 @@ def run_conversation_loop(
             api_messages.append({"role": "system", "content": recalled_context})
         if history_context:
             api_messages.append({"role": "system", "content": history_context})
+        if companion_context:
+            api_messages.append({"role": "system", "content": companion_context})
         if task_context:
             api_messages.append({"role": "system", "content": task_context})
         api_messages.extend(agent.messages)

@@ -53,7 +53,7 @@
   },
   "companion": {
     "enabled": true,
-    "path": "memory/COMPANION_STATE.json",
+    "session_dir": "memory/companion_sessions",
     "review_interval": 10,
     "review_max_chars": 16000,
     "max_threads": 8

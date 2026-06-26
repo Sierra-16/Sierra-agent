@@ -44,15 +44,20 @@ def run_server(
             recent = None
             if convs:
                 recent = {"id": convs[0]["id"], "title": convs[0]["title"]}
+            companion_handoff = ""
+            handoff = getattr(current_agent, "companion_handoff", None)
+            if callable(handoff):
+                companion_handoff = handoff()
             stdout(json.dumps({
                 "type": "init",
                 "model": current_agent.llm.model,
                 "cwd": os.getcwd(),
                 "recent": recent,
+                "companion_hint": companion_handoff,
                 "usage": _usage_payload(current_agent),
                 "task": _agent_task_status(current_agent),
                 "recovery_task": _agent_task_recovery(current_agent),
-            }))
+            }, ensure_ascii=False))
 
         elif cmd == "chat":
             user_msg = msg.get("text", "")
@@ -249,9 +254,14 @@ def run_server(
                 for m in current_agent.messages:
                     if m["role"] == "user":
                         title = m["content"][:30]
+                companion_handoff = ""
+                handoff = getattr(current_agent, "companion_handoff", None)
+                if callable(handoff):
+                    companion_handoff = handoff()
                 stdout(json.dumps({
                     "type": "resumed",
                     "title": title,
+                    "companion_hint": companion_handoff,
                     "usage": _usage_payload(current_agent),
                     "task": _agent_task_status(current_agent),
                     "recovery_task": _agent_task_recovery(current_agent),

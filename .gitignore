@@ -36,6 +36,8 @@ data/*.sqlite3-shm
 memory/USER.md
 memory/MEMORY.md
 memory/COMPANION_STATE.json
+memory/COMPANION_GLOBAL.json
+memory/companion_sessions/
 memory/*.sqlite3
 memory/*.sqlite3-wal
 memory/*.sqlite3-shm

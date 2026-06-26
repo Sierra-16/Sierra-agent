@@ -3,7 +3,10 @@ import logging
 import os
 
 from .conversation_store import ConversationStore
-from .companion_state import CompanionStateStore, parse_companion_update
+from .companion_state import (
+    CompanionStateManager,
+    parse_companion_update,
+)
 from .session_db import SessionDB
 from .llm import LLMClient
 from .tools.registry import registry
@@ -114,7 +117,7 @@ class Agent:
         )
         self.companion_state = None
         try:
-            self.companion_state = CompanionStateStore.from_config(
+            self.companion_state = CompanionStateManager.from_config(
                 companion_config,
                 base_dir=companion_base_dir,
             )
@@ -259,6 +262,7 @@ class Agent:
         on_user_input=None,
     ):
         self.ensure_conversation_id()
+        self.refresh_system_prompt()
         return run_conversation_loop(
             self,
             user_message,
@@ -274,7 +278,9 @@ class Agent:
             extra_parts.append(memory_text)
         companion_state = getattr(self, "companion_state", None)
         if companion_state is not None:
-            companion_text = companion_state.prompt_context()
+            companion_text = companion_state.prompt_context(
+                getattr(self, "conv_id", None)
+            )
             if companion_text:
                 extra_parts.append(companion_text)
         skills_prompt = self.skill_index.build(
@@ -402,7 +408,7 @@ class Agent:
         return self._turns_since_companion_review >= interval
 
     def review_companion_state(self):
-        """Refresh Sierra's lightweight relationship/session state from recent turns."""
+        """Refresh Sierra's current conversation active state from recent turns."""
         self._turns_since_companion_review = 0
         companion_state = getattr(self, "companion_state", None)
         if companion_state is None:
@@ -412,23 +418,21 @@ class Agent:
         if not transcript:
             return {"changed": False}
 
-        current_state = companion_state.load()
+        current_state = companion_state.load(getattr(self, "conv_id", None))
         prompt = (
-            "你是 Sierra 的陪伴状态整理器。请根据近期对话，更新 Sierra 与用户之间的长期陪伴状态。\n"
+            "你是 Sierra 的当前会话状态整理器。请根据近期对话，更新当前会话的 active_state。\n"
             "只返回严格 JSON，不要解释，不要 Markdown。\n"
-            "格式: {\"current_focus\":\"...\",\"collaboration_style\":\"...\","
-            "\"companion_tone\":\"...\",\"recent_mood\":\"...\",\"open_threads\":[\"...\"]}\n\n"
+            "格式: {\"current_focus\":\"...\",\"recent_mood\":\"...\",\"open_threads\":[\"...\"]}\n\n"
             "规则:\n"
-            "- current_focus: 用户近期最主要的长期目标或项目。\n"
-            "- collaboration_style: 用户希望 Sierra 怎样协作、指导或接管。\n"
-            "- companion_tone: 适合当前关系的语气，简短描述即可。\n"
-            "- recent_mood: 用户近期明显的状态或情绪；不确定就留空。\n"
-            "- open_threads: 尚未收束、下次应该接上的具体线索，最多 8 条。\n"
-            "- 只记录对后续陪伴和协作有帮助的信息，不记录一次性细节、密钥、隐私凭证。\n"
+            "- current_focus: 当前会话里用户近期最主要的目标、问题或项目。\n"
+            "- recent_mood: 当前会话里用户明显的临时状态或情绪；不确定就留空。\n"
+            "- open_threads: 当前会话尚未收束、下次应该接上的具体线索，最多 8 条。\n"
+            "- 不记录长期偏好、身份、项目事实或人格设定；这些应交给 USER.md / MEMORY.md / SOUL.md。\n"
+            "- 不记录一次性细节、密钥、隐私凭证、完整代码。\n"
             "- 如果旧状态仍然准确，可以原样返回；如果没有信息，字段留空或返回空列表。"
         )
         review_content = (
-            "【当前陪伴状态】\n"
+            "【当前会话状态】\n"
             f"{json.dumps(current_state, ensure_ascii=False, indent=2)}\n\n"
             "【近期对话】\n"
             f"{transcript}"
@@ -441,7 +445,10 @@ class Agent:
             ])
             self.count_tokens(response["usage"])
             updates = parse_companion_update(response.get("content") or "")
-            result = companion_state.update(updates)
+            result = companion_state.update(
+                updates,
+                getattr(self, "conv_id", None),
+            )
             if result.get("changed"):
                 self.refresh_system_prompt()
             return result
@@ -638,6 +645,7 @@ class Agent:
                 self.refresh_context_estimate()
         else:
             self.refresh_context_estimate()
+        self.refresh_system_prompt()
 
     def list_conversations(self):
         return self.store.list_all()
@@ -696,6 +704,7 @@ class Agent:
         self.total_input_tokens = int(session.get("input_tokens", 0) or 0)
         self.total_output_tokens = int(session.get("output_tokens", 0) or 0)
         self.refresh_context_estimate()
+        self.refresh_system_prompt()
         return {"ok": True, "session": session, "messages": self.messages}
 
     def mcp_status(self):
@@ -725,15 +734,30 @@ class Agent:
             return {"enabled": False, "text": "陪伴状态模块未启用。"}
         return {
             "enabled": True,
-            "state": companion_state.load(),
-            "text": companion_state.display_text(),
+            "state": companion_state.load(getattr(self, "conv_id", None)),
+            "text": companion_state.display_text(getattr(self, "conv_id", None)),
         }
+
+    def companion_handoff(self):
+        companion_state = getattr(self, "companion_state", None)
+        if companion_state is None:
+            return ""
+        return companion_state.handoff(getattr(self, "conv_id", None))
+
+    def companion_continuation_context(self, user_message):
+        companion_state = getattr(self, "companion_state", None)
+        if companion_state is None:
+            return ""
+        return companion_state.continuation_context(
+            user_message,
+            getattr(self, "conv_id", None),
+        )
 
     def companion_clear(self):
         companion_state = getattr(self, "companion_state", None)
         if companion_state is None:
             return {"ok": False, "error": "陪伴状态模块未启用。"}
-        state = companion_state.clear()
+        state = companion_state.clear(getattr(self, "conv_id", None))
         self.refresh_system_prompt()
         return {"ok": True, "state": state}
 

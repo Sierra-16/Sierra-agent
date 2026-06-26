@@ -24,6 +24,9 @@ class FakeCompanionAgent:
             "text": "陪伴状态\n- 当前关注: Sierra",
         }
 
+    def companion_handoff(self):
+        return "Sierra 续接\n最近关注: Sierra"
+
     def close(self):
         self.closed = True
 
@@ -48,6 +51,14 @@ class ServerCompanionCommandTests(unittest.TestCase):
 
         self.assertEqual(events[0]["type"], "companion")
         self.assertIn("当前关注", events[0]["text"])
+
+    def test_init_includes_companion_handoff(self):
+        agent = FakeCompanionAgent()
+
+        events = run_commands(agent, [{"cmd": "init"}])
+
+        self.assertEqual(events[0]["type"], "init")
+        self.assertIn("Sierra 续接", events[0]["companion_hint"])
 
 
 if __name__ == "__main__":

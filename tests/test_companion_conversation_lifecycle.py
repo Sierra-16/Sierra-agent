@@ -4,7 +4,11 @@ from aiagent.conversation_loop import run_conversation_loop
 
 
 class OneShotLLM:
+    def __init__(self):
+        self.calls = []
+
     def stream_chat(self, messages, tools, on_delta):
+        self.calls.append(messages)
         return {
             "content": "好的，我们继续。",
             "tool_calls": None,
@@ -32,6 +36,7 @@ class CompanionAgent:
         self.model = "test-model"
         self.history_recall_config = {"enabled": False}
         self.reviewed = False
+        self.continuation_context = ""
 
     def count_tokens(self, usage):
         self.total_input_tokens += usage["input"]
@@ -46,6 +51,9 @@ class CompanionAgent:
     def review_companion_state(self):
         self.reviewed = True
         return {"changed": True}
+
+    def companion_continuation_context(self, user_message):
+        return self.continuation_context
 
 
 class CompanionConversationLifecycleTests(unittest.TestCase):
@@ -63,6 +71,23 @@ class CompanionConversationLifecycleTests(unittest.TestCase):
         self.assertTrue(agent.reviewed)
         self.assertIn({"type": "companion_check"}, statuses)
         self.assertIn({"type": "companion_updated"}, statuses)
+
+    def test_companion_continuation_context_is_ephemeral(self):
+        agent = CompanionAgent()
+        agent.continuation_context = "<session-continuation>接上 TUI</session-continuation>"
+        statuses = []
+
+        run_conversation_loop(
+            agent,
+            "继续",
+            on_status=statuses.append,
+        )
+
+        api_messages = agent.llm.calls[0]
+        self.assertEqual(api_messages[1]["role"], "system")
+        self.assertIn("session-continuation", api_messages[1]["content"])
+        self.assertNotIn("session-continuation", str(agent.messages))
+        self.assertIn({"type": "companion_resume"}, statuses)
 
 
 if __name__ == "__main__":
