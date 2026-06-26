@@ -307,6 +307,15 @@ def run_server(
                 "text": status.get("text", "暂无陪伴状态。"),
             }, ensure_ascii=False))
 
+        elif cmd == "debug_context":
+            status = current_agent.debug_context_status()
+            stdout(json.dumps({
+                "type": "debug_context",
+                "summary": status.get("summary", {}),
+                "text": status.get("text", ""),
+                "available": bool(status.get("available")),
+            }, ensure_ascii=False))
+
         elif cmd == "memory_search":
             query = str(msg.get("query", "")).strip()
             if not query:

@@ -158,6 +158,7 @@ def _handle_command(cmd, agent):
 /task       查看当前任务计划
 /task-cancel 放弃当前任务
 /companion 查看陪伴状态
+/debug-context 查看上一轮模型上下文摘要
 /skills     查看技能索引与就绪状态
 /skills-reload 重新扫描技能包
 /skills-stats 查看技能使用统计
@@ -255,6 +256,8 @@ def _handle_command(cmd, agent):
             print("已放弃当前任务")
     elif cmd == "/companion":
         print(agent.companion_status().get("text", "暂无陪伴状态。"))
+    elif cmd == "/debug-context":
+        print(agent.debug_context_status().get("text", "暂无 TurnContext。"))
     elif cmd == "/skills":
         _print_skills(agent.skill_summaries(include_unavailable=True))
     elif cmd == "/skills-reload":

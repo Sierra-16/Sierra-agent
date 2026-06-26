@@ -761,6 +761,45 @@ class Agent:
         self.refresh_system_prompt()
         return {"ok": True, "state": state}
 
+    def debug_context_status(self):
+        turn_context = getattr(self, "last_turn_context", None)
+        if turn_context is None:
+            return {
+                "available": False,
+                "summary": {},
+                "text": "暂无 TurnContext。先发送一轮普通消息后再查看。",
+            }
+
+        summary = turn_context.summary()
+        flags = []
+        if summary.get("has_memory_context"):
+            flags.append(f"memory {summary.get('memory_recall_count', 0)}")
+        if summary.get("has_history_context"):
+            flags.append(f"history {summary.get('history_recall_count', 0)}")
+        if summary.get("has_companion_context"):
+            flags.append("active_state")
+        if summary.get("has_task_context"):
+            flags.append("task_plan")
+        if not flags:
+            flags.append("none")
+
+        lines = [
+            "TurnContext",
+            f"- user: {str(getattr(turn_context, 'user_message', '') or '')[:80]}",
+            f"- injected: {', '.join(flags)}",
+            f"- estimated tokens: {summary.get('estimated_context_tokens', 0)}",
+        ]
+        errors = summary.get("errors") or []
+        if errors:
+            lines.append("- errors:")
+            for error in errors:
+                lines.append(f"  - {error}")
+        return {
+            "available": True,
+            "summary": summary,
+            "text": "\n".join(lines),
+        }
+
     def ensure_conversation_id(self):
         if not self.conv_id:
             self.conv_id = self.store.new_id()

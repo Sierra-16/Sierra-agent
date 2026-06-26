@@ -163,7 +163,7 @@ export function useMainApp(gw: Gateway): MainApp {
         case "/help":
           appendMessage({
             role: "system",
-            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /companion  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
+            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /companion  /debug-context  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
           });
           break;
         case "/new":
@@ -220,6 +220,11 @@ export function useMainApp(gw: Gateway): MainApp {
           setBusy(true);
           setStatusText("reading companion state");
           gw.send({ cmd: "companion" });
+          break;
+        case "/debug-context":
+          setBusy(true);
+          setStatusText("reading context");
+          gw.send({ cmd: "debug_context" });
           break;
         case "/memory-search":
           if (!argument) {
@@ -650,6 +655,11 @@ export function useMainApp(gw: Gateway): MainApp {
           setStatusText("");
           setBusy(false);
           break;
+        case "debug_context":
+          appendMessage({ role: "system", text: ev.text || "暂无 TurnContext。" });
+          setStatusText("");
+          setBusy(false);
+          break;
         case "memory_search":
           appendMessage({ role: "system", text: ev.text || "没有找到相关向量记忆。" });
           setStatusText("");
@@ -737,8 +747,18 @@ export function useMainApp(gw: Gateway): MainApp {
       process.exit(0);
     });
 
+    gw.on("interrupted", () => {
+      resetStreamingText();
+      setToolEvents([]);
+      setPendingToolApproval(null);
+      setPendingUserInput(null);
+      setBusy(false);
+      setStatusText("interrupted");
+      gw.send({ cmd: "init", cwd: process.cwd() });
+    });
+
     gw.send({ cmd: "init", cwd: process.cwd() });
-  }, [appendMessage]);
+  }, [appendMessage, resetStreamingText]);
 
   function stop() { gw.stop(); }
 

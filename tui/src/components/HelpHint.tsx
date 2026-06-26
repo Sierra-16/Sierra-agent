@@ -25,12 +25,14 @@ export const HelpHint: React.FC<HelpHintProps> = ({ theme, cols }) => {
     ["/task", "查看当前任务计划"],
     ["/task-cancel", "放弃当前任务"],
     ["/companion", "查看陪伴状态"],
+    ["/debug-context", "查看上下文摘要"],
     ["/memory", "查看记忆"],
     ["/memory-search <问题>", "语义搜索历史记忆"],
     ["/memory-forget <ID>", "删除指定向量记忆"],
     ["/memory-clear", "清空当前工作区向量记忆"],
     ["/audit", "查看工具审计"],
-    ["Ctrl+C", "中断或退出"],
+    ["Ctrl+C", "处理中断，空闲退出"],
+    ["Ctrl+D", "强制退出"],
     ["Esc", "清空输入"],
   ];
 

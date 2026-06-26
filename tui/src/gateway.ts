@@ -66,6 +66,8 @@ export interface ServerEvent {
   summarized_messages?: number;
   kept_messages?: number;
   success?: boolean;
+  available?: boolean;
+  summary?: Record<string, unknown>;
   key?: string;
   title?: string;
   model?: string;
@@ -130,8 +132,11 @@ export interface ServerEvent {
 export class Gateway extends EventEmitter {
   private proc: ChildProcess | null = null;
   private buffer = "";
+  private startArgs: { pythonPath: string; cwd: string; workspaceCwd: string } | null = null;
+  private interrupting = false;
 
   start(pythonPath: string, cwd: string, workspaceCwd: string): void {
+    this.startArgs = { pythonPath, cwd, workspaceCwd };
     const serverScript = "run_server.py";
     this.proc = spawn(pythonPath, [serverScript], {
       cwd,
@@ -165,6 +170,17 @@ export class Gateway extends EventEmitter {
     });
 
     this.proc.on("exit", () => {
+      this.proc = null;
+      this.buffer = "";
+      if (this.interrupting) {
+        this.interrupting = false;
+        const args = this.startArgs;
+        if (args) {
+          this.start(args.pythonPath, args.cwd, args.workspaceCwd);
+        }
+        this.emit("interrupted");
+        return;
+      }
       this.emit("exit");
     });
   }
@@ -179,6 +195,19 @@ export class Gateway extends EventEmitter {
     if (this.proc) {
       this.send({ cmd: "quit" });
       setTimeout(() => this.proc?.kill(), 500);
+    }
+  }
+
+  interrupt(): void {
+    if (this.proc) {
+      this.interrupting = true;
+      this.proc.kill();
+    }
+  }
+
+  forceStop(): void {
+    if (this.proc) {
+      this.proc.kill();
     }
   }
 }

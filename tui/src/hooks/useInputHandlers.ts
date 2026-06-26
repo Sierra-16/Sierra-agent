@@ -45,6 +45,7 @@ export function useInputHandlers(opts: UseInputHandlersOptions) {
     composerState,
     busy,
     gw,
+    appendMessage,
     hintIdx,
     setHintIdx,
     modelPickerOpen,
@@ -138,7 +139,8 @@ export function useInputHandlers(opts: UseInputHandlersOptions) {
     // Ctrl+C
     if (key.ctrl && ch === "c") {
       if (busy) {
-        gw?.send({ cmd: "quit" });
+        appendMessage({ role: "system", text: "已中断当前处理，正在恢复 Sierra..." });
+        gw?.interrupt();
         return;
       }
       if (composerState.input) {
