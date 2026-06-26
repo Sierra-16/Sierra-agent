@@ -134,9 +134,12 @@ export class Gateway extends EventEmitter {
   private buffer = "";
   private startArgs: { pythonPath: string; cwd: string; workspaceCwd: string } | null = null;
   private interrupting = false;
+  private discardOutput = false;
+  private queuedMessages: Record<string, unknown>[] = [];
 
   start(pythonPath: string, cwd: string, workspaceCwd: string): void {
     this.startArgs = { pythonPath, cwd, workspaceCwd };
+    this.discardOutput = false;
     const serverScript = "run_server.py";
     this.proc = spawn(pythonPath, [serverScript], {
       cwd,
@@ -153,6 +156,7 @@ export class Gateway extends EventEmitter {
     this.proc.on("error", () => {});
 
     this.proc.stdout?.on("data", (chunk: Buffer) => {
+      if (this.discardOutput) return;
       this.buffer += chunk.toString();
       const lines = this.buffer.split("\n");
       this.buffer = lines.pop() || "";
@@ -166,6 +170,7 @@ export class Gateway extends EventEmitter {
     });
 
     this.proc.stderr?.on("data", (chunk: Buffer) => {
+      if (this.discardOutput) return;
       process.stderr.write(chunk);
     });
 
@@ -178,6 +183,7 @@ export class Gateway extends EventEmitter {
         if (args) {
           this.start(args.pythonPath, args.cwd, args.workspaceCwd);
         }
+        this.flushQueue();
         this.emit("interrupted");
         return;
       }
@@ -186,28 +192,53 @@ export class Gateway extends EventEmitter {
   }
 
   send(msg: Record<string, unknown>): void {
-    if (this.proc?.stdin?.writable) {
+    if (!this.interrupting && !this.discardOutput && this.proc?.stdin?.writable) {
       this.proc.stdin.write(JSON.stringify(msg) + "\n", "utf-8");
+      return;
     }
+    this.queuedMessages.push(msg);
   }
 
   stop(): void {
     if (this.proc) {
       this.send({ cmd: "quit" });
-      setTimeout(() => this.proc?.kill(), 500);
+      setTimeout(() => this.killProcessTree(), 500);
     }
   }
 
   interrupt(): void {
     if (this.proc) {
       this.interrupting = true;
-      this.proc.kill();
+      this.discardOutput = true;
+      this.emit("interrupting");
+      this.killProcessTree();
     }
   }
 
   forceStop(): void {
     if (this.proc) {
-      this.proc.kill();
+      this.killProcessTree();
     }
+  }
+
+  private flushQueue(): void {
+    const queued = this.queuedMessages.splice(0);
+    for (const msg of queued) {
+      this.send(msg);
+    }
+  }
+
+  private killProcessTree(): void {
+    const pid = this.proc?.pid;
+    if (!this.proc || !pid) return;
+    if (process.platform === "win32") {
+      const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.on("error", () => this.proc?.kill());
+      return;
+    }
+    this.proc.kill("SIGKILL");
   }
 }

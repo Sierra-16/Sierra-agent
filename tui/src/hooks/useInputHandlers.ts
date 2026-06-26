@@ -23,6 +23,7 @@ interface UseInputHandlersOptions {
   busy: boolean;
   gw: Gateway;
   appendMessage: (msg: { role: string; text: string }) => void;
+  interruptCurrentRun: () => void;
   hintIdx: number;
   setHintIdx: (v: number | ((prev: number) => number)) => void;
   modelPickerOpen: boolean;
@@ -45,7 +46,7 @@ export function useInputHandlers(opts: UseInputHandlersOptions) {
     composerState,
     busy,
     gw,
-    appendMessage,
+    interruptCurrentRun,
     hintIdx,
     setHintIdx,
     modelPickerOpen,
@@ -139,8 +140,7 @@ export function useInputHandlers(opts: UseInputHandlersOptions) {
     // Ctrl+C
     if (key.ctrl && ch === "c") {
       if (busy) {
-        appendMessage({ role: "system", text: "已中断当前处理，正在恢复 Sierra..." });
-        gw?.interrupt();
+        interruptCurrentRun();
         return;
       }
       if (composerState.input) {

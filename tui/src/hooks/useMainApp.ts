@@ -352,6 +352,17 @@ export function useMainApp(gw: Gateway): MainApp {
     sendUserInputResponse({ cancelled: true });
   }, [sendUserInputResponse]);
 
+  const interruptCurrentRun = useCallback(() => {
+    resetStreamingText();
+    setToolEvents([]);
+    setPendingToolApproval(null);
+    setPendingUserInput(null);
+    setBusy(false);
+    setStatusText("");
+    appendMessage({ role: "system", text: "已中断当前处理，Sierra 正在恢复..." });
+    gw.interrupt();
+  }, [appendMessage, gw, resetStreamingText]);
+
   const moveTaskRecoverySelection = useCallback((delta: number) => {
     setTaskRecoverySelectedIndex((previous) => (previous + delta + 2) % 2);
   }, []);
@@ -394,6 +405,7 @@ export function useMainApp(gw: Gateway): MainApp {
     pendingUserInput,
     moveUserInputSelection,
     cancelUserInput,
+    interruptCurrentRun,
     pendingTaskRecovery,
     moveTaskRecoverySelection,
     confirmTaskRecovery,
@@ -747,13 +759,22 @@ export function useMainApp(gw: Gateway): MainApp {
       process.exit(0);
     });
 
+    gw.on("interrupting", () => {
+      resetStreamingText();
+      setToolEvents([]);
+      setPendingToolApproval(null);
+      setPendingUserInput(null);
+      setBusy(false);
+      setStatusText("");
+    });
+
     gw.on("interrupted", () => {
       resetStreamingText();
       setToolEvents([]);
       setPendingToolApproval(null);
       setPendingUserInput(null);
       setBusy(false);
-      setStatusText("interrupted");
+      setStatusText("");
       gw.send({ cmd: "init", cwd: process.cwd() });
     });
 
