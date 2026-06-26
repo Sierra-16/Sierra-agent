@@ -163,7 +163,7 @@ export function useMainApp(gw: Gateway): MainApp {
         case "/help":
           appendMessage({
             role: "system",
-            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /companion  /debug-context  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
+            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /companion  /debug-context  /jobs  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
           });
           break;
         case "/new":
@@ -225,6 +225,11 @@ export function useMainApp(gw: Gateway): MainApp {
           setBusy(true);
           setStatusText("reading context");
           gw.send({ cmd: "debug_context" });
+          break;
+        case "/jobs":
+          setBusy(true);
+          setStatusText("reading background jobs");
+          gw.send({ cmd: "jobs" });
           break;
         case "/memory-search":
           if (!argument) {
@@ -494,6 +499,9 @@ export function useMainApp(gw: Gateway): MainApp {
         case "companion_resume":
           setStatusText("continuing companion thread");
           break;
+        case "background_jobs_queued":
+          setStatusText(`queued ${ev.count || 1} background job${(ev.count || 1) > 1 ? "s" : ""}`);
+          break;
         case "history_recall":
           setStatusText(`recalled ${ev.count || 1} history`);
           break;
@@ -669,6 +677,11 @@ export function useMainApp(gw: Gateway): MainApp {
           break;
         case "debug_context":
           appendMessage({ role: "system", text: ev.text || "暂无 TurnContext。" });
+          setStatusText("");
+          setBusy(false);
+          break;
+        case "jobs":
+          appendMessage({ role: "system", text: ev.text || "No background jobs." });
           setStatusText("");
           setBusy(false);
           break;

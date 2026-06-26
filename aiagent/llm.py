@@ -1,6 +1,12 @@
 from openai import OpenAI
+import logging
 import time
 from openai import APIStatusError
+
+
+logger = logging.getLogger(__name__)
+
+
 class LLMClient:
     def __init__(self, base_url, api_key, model, max_tokens, temperature):
         self.client = OpenAI(base_url=base_url, api_key=api_key)
@@ -34,7 +40,12 @@ class LLMClient:
             except Exception as e:
                 if not self._should_retry(e, attempt):
                     raise
-                print(f"\n⚠️ API 调用失败 (第 {attempt+1}/{self.max_retries} 次): {e}")
+                logger.warning(
+                    "API call failed (%s/%s): %s",
+                    attempt + 1,
+                    self.max_retries,
+                    e,
+                )
                 time.sleep(2 ** attempt)  # 指数退避
 
         message = response.choices[0].message
@@ -88,7 +99,12 @@ class LLMClient:
             except Exception as e:
                 if not self._should_retry(e, attempt):
                     raise
-                print(f"\n⚠️ API 调用失败 (第 {attempt+1}/{self.max_retries} 次): {e}")
+                logger.warning(
+                    "API call failed (%s/%s): %s",
+                    attempt + 1,
+                    self.max_retries,
+                    e,
+                )
                 time.sleep(2 ** attempt)  # 指数退避
         for chunk in stream:
             if hasattr(chunk, "usage") and chunk.usage:
@@ -158,7 +174,3 @@ class LLMClient:
             "usage": usage or {"input": 0, "output": 0},
             "finish_reason": finish_reason or "stop"
         }
-
-            
-
-        

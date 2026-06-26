@@ -58,6 +58,10 @@
     "review_max_chars": 16000,
     "max_threads": 8
   },
+  "background_jobs": {
+    "enabled": true,
+    "max_history": 100
+  },
   "skills": {
     "disabled": [],
     "compact_categories": [],

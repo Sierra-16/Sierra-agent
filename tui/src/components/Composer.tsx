@@ -28,6 +28,7 @@ export const COMMANDS: CommandDefinition[] = [
   { cmd: "/task-cancel", desc: "放弃当前任务" },
   { cmd: "/companion", desc: "查看陪伴状态" },
   { cmd: "/debug-context", desc: "查看上下文摘要" },
+  { cmd: "/jobs", desc: "查看后台队列" },
   { cmd: "/memory", desc: "查看记忆状态" },
   { cmd: "/memory-search", desc: "语义搜索记忆", requiresArg: true },
   { cmd: "/memory-forget", desc: "删除指定记忆", requiresArg: true },

@@ -1,7 +1,9 @@
+import copy
 import json
 import logging
 import os
 
+from .background_jobs import BackgroundJobQueue
 from .conversation_store import ConversationStore
 from .companion_state import (
     CompanionStateManager,
@@ -52,6 +54,7 @@ class Agent:
         skill_config=None,
         session_config=None,
         companion_config=None,
+        background_config=None,
         workspace=None,
         sierra_dir=None,
     ):
@@ -60,6 +63,7 @@ class Agent:
         self.tools = registry
         self.safety = SafetyGate()
         self.permission_policy = PermissionPolicy(permission_config)
+        self.background_jobs = BackgroundJobQueue.from_config(background_config)
         self.audit = AuditLogger.from_config(
             audit_config,
             base_dir=sierra_dir,
@@ -342,6 +346,188 @@ class Agent:
     def _skill_usage_stats_tool(self, limit=20):
         return json.dumps(self.skill_usage_stats(limit=limit), ensure_ascii=False)
 
+    def schedule_post_turn_maintenance(
+        self,
+        user_message,
+        assistant_message,
+        *,
+        messages_snapshot=None,
+        on_status=None,
+    ):
+        """Queue best-effort maintenance work after the user-visible reply."""
+        queue = getattr(self, "background_jobs", None)
+        if queue is None or not getattr(queue, "enabled", True):
+            return self._run_post_turn_maintenance_sync(
+                user_message,
+                assistant_message,
+                messages_snapshot=messages_snapshot,
+            )
+
+        conversation_id = getattr(self, "conv_id", None)
+        metadata = {
+            "conversation_id": conversation_id,
+            "model": getattr(self, "model", ""),
+            "workspace": getattr(self, "workspace", ""),
+        }
+        snapshot = (
+            copy.deepcopy(messages_snapshot)
+            if messages_snapshot is not None
+            else copy.deepcopy(getattr(self, "messages", []))
+        )
+        queued = []
+
+        memory_manager = getattr(self, "memory_manager", None)
+        if memory_manager is not None and user_message and assistant_message:
+            job = queue.submit(
+                "memory_sync",
+                lambda: self._sync_memory_turn_now(
+                    user_message,
+                    assistant_message,
+                    metadata,
+                ),
+                metadata=metadata,
+            )
+            queued.append(job)
+
+        review_due = getattr(self, "memory_review_due", None)
+        review_memory = getattr(self, "review_recent_memory", None)
+        if callable(review_due) and callable(review_memory) and review_due():
+            job = queue.submit(
+                "memory_review",
+                lambda: self._run_memory_review_job(snapshot),
+                metadata=metadata,
+            )
+            queued.append(job)
+
+        companion_due = getattr(self, "companion_review_due", None)
+        review_companion = getattr(self, "review_companion_state", None)
+        if callable(companion_due) and callable(review_companion) and companion_due():
+            job = queue.submit(
+                "companion_review",
+                lambda: self._run_companion_review_job(snapshot, conversation_id),
+                metadata=metadata,
+            )
+            queued.append(job)
+
+        if on_status and queued:
+            try:
+                on_status({
+                    "type": "background_jobs_queued",
+                    "count": len(queued),
+                    "names": [job.name for job in queued],
+                })
+            except Exception:
+                pass
+        return {"queued": [job.to_dict() for job in queued]}
+
+    def _run_post_turn_maintenance_sync(
+        self,
+        user_message,
+        assistant_message,
+        *,
+        messages_snapshot=None,
+    ):
+        metadata = {
+            "conversation_id": getattr(self, "conv_id", None),
+            "model": getattr(self, "model", ""),
+            "workspace": getattr(self, "workspace", ""),
+        }
+        if getattr(self, "memory_manager", None) is not None:
+            self._sync_memory_turn_now(user_message, assistant_message, metadata)
+        if self.memory_review_due():
+            self.review_recent_memory(messages=messages_snapshot)
+        if self.companion_review_due():
+            self.review_companion_state(
+                messages=messages_snapshot,
+                conversation_id=getattr(self, "conv_id", None),
+            )
+        return {"queued": []}
+
+    def _sync_memory_turn_now(self, user_message, assistant_message, metadata):
+        memory_manager = getattr(self, "memory_manager", None)
+        if memory_manager is None:
+            return {"synced": False}
+        future = memory_manager.sync_turn(
+            user_message,
+            assistant_message,
+            metadata=dict(metadata or {}),
+        )
+        if future is not None:
+            future.result()
+        return {"synced": True}
+
+    def _run_memory_review_job(self, messages_snapshot):
+        result = self.review_recent_memory(messages=messages_snapshot)
+        saved = result.get("saved", []) if isinstance(result, dict) else []
+        errors = result.get("errors", []) if isinstance(result, dict) else []
+        summary = {"saved": len(saved)}
+        if errors:
+            summary["errors"] = len(errors)
+        if isinstance(result, dict) and result.get("error"):
+            summary["error"] = result.get("error")
+        return summary
+
+    def _run_companion_review_job(self, messages_snapshot, conversation_id):
+        result = self.review_companion_state(
+            messages=messages_snapshot,
+            conversation_id=conversation_id,
+        )
+        return {
+            "changed": bool(result.get("changed")) if isinstance(result, dict) else False,
+        }
+
+    def background_jobs_status(self, limit=20):
+        queue = getattr(self, "background_jobs", None)
+        if queue is None:
+            return {
+                "enabled": False,
+                "text": "Background jobs are not available.",
+                "jobs": [],
+            }
+        status = queue.status(limit=limit)
+        return {
+            **status,
+            "text": self._format_background_jobs_status(status),
+        }
+
+    def _format_background_jobs_status(self, status):
+        jobs = status.get("jobs", [])
+        lines = [
+            "Background Jobs",
+            (
+                f"- pending {status.get('pending_count', 0)} · "
+                f"running {status.get('running_count', 0)} · "
+                f"failed {status.get('failed_count', 0)}"
+            ),
+        ]
+        if not jobs:
+            lines.append("- no jobs yet")
+            return "\n".join(lines)
+
+        status_mark = {
+            "pending": "·",
+            "running": "...",
+            "done": "✓",
+            "failed": "!",
+            "cancelled": "-",
+        }
+        for job in jobs:
+            mark = status_mark.get(job.get("status"), "?")
+            duration = int(job.get("duration_ms") or 0)
+            summary = job.get("summary") or {}
+            summary_text = ""
+            if summary:
+                summary_text = " · " + ", ".join(
+                    f"{key}={value}" for key, value in summary.items()
+                )
+            if job.get("error"):
+                summary_text = f" · error={job['error']}"
+            lines.append(
+                f"{mark} {job.get('name', '?')} [{job.get('status', '?')}] "
+                f"{duration}ms{summary_text}"
+            )
+        return "\n".join(lines)
+
     def memory_review_due(self):
         """Record a completed turn and report whether periodic review is due."""
         if self.memory_review_interval <= 0:
@@ -349,9 +535,9 @@ class Agent:
         self._turns_since_memory_review += 1
         return self._turns_since_memory_review >= self.memory_review_interval
 
-    def review_recent_memory(self):
+    def review_recent_memory(self, messages=None):
         """Review the latest interval of completed turns for durable memories."""
-        transcript = self._build_memory_review_transcript()
+        transcript = self._build_memory_review_transcript(messages)
         self._turns_since_memory_review = 0
         if not transcript:
             return {"saved": []}
@@ -407,18 +593,23 @@ class Agent:
         )
         return self._turns_since_companion_review >= interval
 
-    def review_companion_state(self):
+    def review_companion_state(self, messages=None, conversation_id=None):
         """Refresh Sierra's current conversation active state from recent turns."""
         self._turns_since_companion_review = 0
         companion_state = getattr(self, "companion_state", None)
         if companion_state is None:
             return {"changed": False}
 
-        transcript = self._build_companion_review_transcript()
+        transcript = self._build_companion_review_transcript(messages)
         if not transcript:
             return {"changed": False}
 
-        current_state = companion_state.load(getattr(self, "conv_id", None))
+        session_id = (
+            getattr(self, "conv_id", None)
+            if conversation_id is None
+            else conversation_id
+        )
+        current_state = companion_state.load(session_id)
         prompt = (
             "你是 Sierra 的当前会话状态整理器。请根据近期对话，更新当前会话的 active_state。\n"
             "只返回严格 JSON，不要解释，不要 Markdown。\n"
@@ -447,7 +638,7 @@ class Agent:
             updates = parse_companion_update(response.get("content") or "")
             result = companion_state.update(
                 updates,
-                getattr(self, "conv_id", None),
+                session_id,
             )
             if result.get("changed"):
                 self.refresh_system_prompt()
@@ -455,11 +646,11 @@ class Agent:
         except Exception as exc:
             return {"changed": False, "error": str(exc)}
 
-    def _build_companion_review_transcript(self):
+    def _build_companion_review_transcript(self, messages=None):
         turns = []
         current = None
 
-        for message in self.messages:
+        for message in (messages if messages is not None else self.messages):
             role = message.get("role")
             content = message.get("content")
             if role == "user":
@@ -490,11 +681,11 @@ class Agent:
         blocks.reverse()
         return "\n\n---\n\n".join(blocks)
 
-    def _build_memory_review_transcript(self):
+    def _build_memory_review_transcript(self, messages=None):
         turns = []
         current = None
 
-        for message in self.messages:
+        for message in (messages if messages is not None else self.messages):
             role = message.get("role")
             content = message.get("content")
             if role == "user":
@@ -936,6 +1127,10 @@ class Agent:
             if self.task_manager is not None:
                 self.task_manager.close(preserve_active=preserve_task)
         finally:
+            try:
+                self.background_jobs.close(wait=False)
+            except Exception:
+                pass
             self.tools.unregister("update_plan")
             self.tools.unregister("get_plan")
             self.tools.unregister("resolve_task_execution")

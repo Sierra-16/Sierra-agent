@@ -40,6 +40,7 @@ def main():
         skill_config=config.get("skills", {}),
         session_config=config.get("sessions", {}),
         companion_config=config.get("companion", {}),
+        background_config=config.get("background_jobs", {}),
     )
 
     # ── 欢迎横幅 ──
@@ -159,6 +160,7 @@ def _handle_command(cmd, agent):
 /task-cancel 放弃当前任务
 /companion 查看陪伴状态
 /debug-context 查看上一轮模型上下文摘要
+/jobs      查看后台维护队列
 /skills     查看技能索引与就绪状态
 /skills-reload 重新扫描技能包
 /skills-stats 查看技能使用统计
@@ -258,6 +260,8 @@ def _handle_command(cmd, agent):
         print(agent.companion_status().get("text", "暂无陪伴状态。"))
     elif cmd == "/debug-context":
         print(agent.debug_context_status().get("text", "暂无 TurnContext。"))
+    elif cmd == "/jobs":
+        print(agent.background_jobs_status().get("text", "暂无后台任务。"))
     elif cmd == "/skills":
         _print_skills(agent.skill_summaries(include_unavailable=True))
     elif cmd == "/skills-reload":

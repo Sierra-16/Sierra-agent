@@ -491,36 +491,48 @@ def run_conversation_loop(
         agent.messages.append({"role": "assistant", "content": final_text})
         if callable(checkpoint_conversation):
             checkpoint_conversation()
-        if memory_manager is not None:
+        schedule_maintenance = getattr(agent, "schedule_post_turn_maintenance", None)
+        if callable(schedule_maintenance):
             try:
-                memory_manager.sync_turn(
+                schedule_maintenance(
                     user_message,
                     final_text,
-                    metadata={
-                        "conversation_id": getattr(agent, "conv_id", None),
-                        "model": getattr(agent, "model", ""),
-                        "workspace": getattr(agent, "workspace", ""),
-                    },
+                    messages_snapshot=list(agent.messages),
+                    on_status=on_status,
                 )
             except Exception:
                 pass
-        review_due = getattr(agent, "memory_review_due", None)
-        review_memory = getattr(agent, "review_recent_memory", None)
-        if callable(review_due) and callable(review_memory) and review_due():
-            if on_status:
-                on_status({"type": "memory_check"})
-            memory_result = review_memory()
-            saved = memory_result.get("saved", [])
-            if on_status and saved:
-                on_status({"type": "memory_saved", "count": len(saved)})
-        companion_due = getattr(agent, "companion_review_due", None)
-        review_companion = getattr(agent, "review_companion_state", None)
-        if callable(companion_due) and callable(review_companion) and companion_due():
-            if on_status:
-                on_status({"type": "companion_check"})
-            companion_result = review_companion()
-            if on_status and companion_result.get("changed"):
-                on_status({"type": "companion_updated"})
+        else:
+            if memory_manager is not None:
+                try:
+                    memory_manager.sync_turn(
+                        user_message,
+                        final_text,
+                        metadata={
+                            "conversation_id": getattr(agent, "conv_id", None),
+                            "model": getattr(agent, "model", ""),
+                            "workspace": getattr(agent, "workspace", ""),
+                        },
+                    )
+                except Exception:
+                    pass
+            review_due = getattr(agent, "memory_review_due", None)
+            review_memory = getattr(agent, "review_recent_memory", None)
+            if callable(review_due) and callable(review_memory) and review_due():
+                if on_status:
+                    on_status({"type": "memory_check"})
+                memory_result = review_memory()
+                saved = memory_result.get("saved", [])
+                if on_status and saved:
+                    on_status({"type": "memory_saved", "count": len(saved)})
+            companion_due = getattr(agent, "companion_review_due", None)
+            review_companion = getattr(agent, "review_companion_state", None)
+            if callable(companion_due) and callable(review_companion) and companion_due():
+                if on_status:
+                    on_status({"type": "companion_check"})
+                companion_result = review_companion()
+                if on_status and companion_result.get("changed"):
+                    on_status({"type": "companion_updated"})
         return final_text
 
     return "已达到最大迭代次数，未能得到最终回答。"

@@ -316,6 +316,20 @@ def run_server(
                 "available": bool(status.get("available")),
             }, ensure_ascii=False))
 
+        elif cmd == "jobs":
+            status_fn = getattr(current_agent, "background_jobs_status", None)
+            status = (
+                status_fn(limit=20)
+                if callable(status_fn)
+                else {"enabled": False, "jobs": [], "text": "Background jobs are not available."}
+            )
+            stdout(json.dumps({
+                "type": "jobs",
+                "jobs": status.get("jobs", []),
+                "text": status.get("text", ""),
+                "enabled": bool(status.get("enabled")),
+            }, ensure_ascii=False))
+
         elif cmd == "memory_search":
             query = str(msg.get("query", "")).strip()
             if not query:
