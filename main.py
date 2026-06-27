@@ -69,6 +69,7 @@ def main():
         background_config=config.get("background_jobs", {}),
         context_config=config.get("context", {}),
         cron_config=config.get("cron", {}),
+        checkpoint_config=config.get("checkpoints", {}),
         workspace=os.getcwd(),
         sierra_dir=SIERRA_DIR,
     )

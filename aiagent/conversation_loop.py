@@ -131,6 +131,12 @@ def run_conversation_loop(
     on_user_input=None,
 ):
     turn_start_index = len(agent.messages)
+    checkpoint_manager = getattr(agent, "checkpoints", None)
+    if checkpoint_manager is not None:
+        try:
+            checkpoint_manager.new_turn()
+        except Exception:
+            pass
     agent.messages.append({"role": "user", "content": user_message})
     checkpoint_conversation = getattr(agent, "checkpoint_conversation", None)
     if callable(checkpoint_conversation):
@@ -301,6 +307,12 @@ def run_conversation_loop(
             except Exception:
                 task_execution_id = None
         try:
+            checkpoint_before_tool = getattr(agent, "checkpoint_before_tool", None)
+            if callable(checkpoint_before_tool):
+                try:
+                    checkpoint_before_tool(name, args)
+                except Exception:
+                    pass
             result = agent.tools.execute(name, args)
         except Exception as exc:
             if task_manager is not None:

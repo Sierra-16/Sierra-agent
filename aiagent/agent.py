@@ -33,6 +33,7 @@ from .context_compaction import (
     strip_historical_media,
 )
 from .context_files import ContextFileLoader
+from .checkpoints import CheckpointManager
 from .cron import CronStore
 from .skill_suggestions import suggest_skill_from_turn
 from .tasks import TaskCheckpointStore, TaskManager
@@ -109,6 +110,7 @@ class Agent:
         background_config=None,
         context_config=None,
         cron_config=None,
+        checkpoint_config=None,
         workspace=None,
         sierra_dir=None,
     ):
@@ -207,6 +209,10 @@ class Agent:
         context_config = context_config if isinstance(context_config, dict) else {}
         self.context_files = ContextFileLoader.from_config(context_config)
         self.last_context_files = None
+        self.checkpoints = CheckpointManager.from_config(
+            checkpoint_config,
+            base_dir=self.sierra_dir,
+        )
         self.cron = CronStore.from_config(cron_config, base_dir=self.sierra_dir)
         self.model_context_window = max(1, int(context_window))
         self.context_window = _resolve_prompt_budget(
@@ -645,6 +651,94 @@ class Agent:
             "reason": suggestion.reason,
             "text": suggestion.to_text(),
         }
+
+    def checkpoint_before_tool(self, tool_name, arguments):
+        manager = getattr(self, "checkpoints", None)
+        if manager is None:
+            return None
+        if not self._tool_should_checkpoint(tool_name, arguments):
+            return None
+        return manager.ensure_checkpoint(
+            self.workspace,
+            reason=self._checkpoint_reason(tool_name, arguments),
+        )
+
+    def _tool_should_checkpoint(self, tool_name, arguments):
+        name = str(tool_name or "")
+        arguments = arguments if isinstance(arguments, dict) else {}
+        if name == "write_file":
+            return self._path_is_in_workspace(arguments.get("file_path"))
+        if name == "powershell":
+            return (
+                self._path_is_in_workspace(arguments.get("cwd") or ".")
+                and self._powershell_command_may_mutate(arguments.get("command"))
+            )
+        return False
+
+    def _path_is_in_workspace(self, path):
+        workspace = os.path.abspath(self.workspace)
+        raw = str(path or ".").strip() or "."
+        expanded = os.path.expanduser(os.path.expandvars(raw))
+        resolved = (
+            os.path.abspath(expanded)
+            if os.path.isabs(expanded)
+            else os.path.abspath(os.path.join(workspace, expanded))
+        )
+        try:
+            return os.path.commonpath([workspace, resolved]) == workspace
+        except ValueError:
+            return False
+
+    def _checkpoint_reason(self, tool_name, arguments):
+        arguments = arguments if isinstance(arguments, dict) else {}
+        if tool_name == "write_file":
+            target = str(arguments.get("file_path") or "").strip()
+            return f"before write_file {target}"[:200]
+        if tool_name == "powershell":
+            command = " ".join(str(arguments.get("command") or "").split())
+            return f"before powershell {command}"[:200]
+        return f"before {tool_name}"[:200]
+
+    def _powershell_command_may_mutate(self, command):
+        command = str(command or "").lower()
+        mutating_markers = (
+            ">",
+            ">>",
+            "set-content",
+            "add-content",
+            "out-file",
+            "tee-object",
+            "new-item",
+            "mkdir",
+            "md ",
+            "remove-item",
+            "rm ",
+            "del ",
+            "erase ",
+            "rmdir",
+            "rd ",
+            "move-item",
+            "mv ",
+            "rename-item",
+            "ren ",
+            "copy-item",
+            "cp ",
+            "git apply",
+            "git checkout",
+            "git clean",
+            "git reset",
+            "git revert",
+            "git commit",
+            "git merge",
+            "git pull",
+            "git push",
+            "npm install",
+            "pnpm install",
+            "yarn install",
+            "pip install",
+        )
+        padded = f" {command} "
+        return any(marker in padded for marker in mutating_markers)
 
     def schedule_post_turn_maintenance(
         self,

@@ -27,6 +27,7 @@ build/
 # Runtime data
 conversations/
 logs/
+checkpoints/
 tasks/*.json
 tasks/*.sqlite3
 tasks/*.sqlite3-wal

@@ -42,6 +42,13 @@
     "enabled": true,
     "path": "tasks/task_checkpoints.sqlite3"
   },
+  "checkpoints": {
+    "enabled": true,
+    "path": "checkpoints/store",
+    "max_snapshots": 20,
+    "max_files": 30000,
+    "timeout_seconds": 30
+  },
   "sessions": {
     "enabled": true,
     "path": "data/sierra.sqlite3",

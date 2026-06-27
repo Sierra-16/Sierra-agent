@@ -51,6 +51,7 @@ def make_agent(model_key):
         background_config=config.get("background_jobs", {}),
         context_config=config.get("context", {}),
         cron_config=config.get("cron", {}),
+        checkpoint_config=config.get("checkpoints", {}),
         workspace=os.getcwd(),
         sierra_dir=sierra_dir,
         permission_config=config.get("permissions", {}),
