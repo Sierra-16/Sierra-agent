@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .context_references import preprocess_context_references
 from .history_recall import build_history_context, recall_history
 
 
@@ -18,11 +19,12 @@ class TurnContext:
     system_prompt: str
     memory_context: str = ""
     history_context: str = ""
-    companion_context: str = ""
     task_context: str = ""
+    reference_context: str = ""
+    reference_message: str = ""
+    reference_count: int = 0
     memory_recall_count: int = 0
     history_recall_count: int = 0
-    companion_resumed: bool = False
     errors: list[str] = field(default_factory=list)
     estimated_context_tokens: int = 0
 
@@ -31,15 +33,23 @@ class TurnContext:
         for content in (
             self.memory_context,
             self.history_context,
-            self.companion_context,
             self.task_context,
+            self.reference_context,
         ):
             if content:
                 messages.append({"role": "system", "content": content})
         return messages
 
     def build_messages(self, conversation_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [*self.system_messages(), *conversation_messages]
+        if not self.reference_message:
+            return [*self.system_messages(), *conversation_messages]
+        conversation_copy = [dict(message) for message in conversation_messages]
+        for index in range(len(conversation_copy) - 1, -1, -1):
+            message = conversation_copy[index]
+            if message.get("role") == "user":
+                message["content"] = self.reference_message
+                break
+        return [*self.system_messages(), *conversation_copy]
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -47,9 +57,9 @@ class TurnContext:
             "history_recall_count": self.history_recall_count,
             "has_memory_context": bool(self.memory_context),
             "has_history_context": bool(self.history_context),
-            "has_companion_context": bool(self.companion_context),
             "has_task_context": bool(self.task_context),
-            "companion_resumed": self.companion_resumed,
+            "has_reference_context": bool(self.reference_context),
+            "reference_count": self.reference_count,
             "estimated_context_tokens": self.estimated_context_tokens,
             "errors": list(self.errors),
         }
@@ -86,15 +96,30 @@ def build_turn_context(agent, user_message: str, on_status: Callable[[dict], Non
     except Exception as exc:
         context.errors.append(f"history_recall: {exc}")
 
-    companion_continuation = getattr(agent, "companion_continuation_context", None)
-    if callable(companion_continuation):
-        try:
-            context.companion_context = companion_continuation(user_message)
-            context.companion_resumed = bool(context.companion_context)
-            if context.companion_context and on_status:
-                on_status({"type": "companion_resume"})
-        except Exception as exc:
-            context.errors.append(f"companion_continuation: {exc}")
+    try:
+        reference_result = preprocess_context_references(
+            user_message,
+            workspace=getattr(agent, "workspace", "."),
+            context_window=getattr(agent, "context_window", 120000),
+        )
+        context.reference_count = len(reference_result.references)
+        context.reference_context = reference_result.context
+        if reference_result.expanded:
+            context.reference_message = reference_result.message
+        if reference_result.warnings:
+            context.errors.extend(
+                f"context_reference: {warning}"
+                for warning in reference_result.warnings[:5]
+            )
+        if reference_result.expanded and on_status:
+            on_status({
+                "type": "context_references",
+                "count": len(reference_result.references),
+                "injected_chars": reference_result.injected_chars,
+                "warnings": len(reference_result.warnings),
+            })
+    except Exception as exc:
+        context.errors.append(f"context_references: {exc}")
 
     return context
 

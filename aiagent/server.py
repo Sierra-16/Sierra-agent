@@ -47,16 +47,11 @@ def run_server(
             recent = None
             if convs:
                 recent = {"id": convs[0]["id"], "title": convs[0]["title"]}
-            companion_handoff = ""
-            handoff = getattr(current_agent, "companion_handoff", None)
-            if callable(handoff):
-                companion_handoff = handoff()
             stdout(json.dumps({
                 "type": "init",
                 "model": current_agent.llm.model,
                 "cwd": getattr(current_agent, "workspace", None) or os.getcwd(),
                 "recent": recent,
-                "companion_hint": companion_handoff,
                 "usage": _usage_payload(current_agent),
                 "task": _agent_task_status(current_agent),
                 "recovery_task": _agent_task_recovery(current_agent),
@@ -257,14 +252,9 @@ def run_server(
                 for m in current_agent.messages:
                     if m["role"] == "user":
                         title = m["content"][:30]
-                companion_handoff = ""
-                handoff = getattr(current_agent, "companion_handoff", None)
-                if callable(handoff):
-                    companion_handoff = handoff()
                 stdout(json.dumps({
                     "type": "resumed",
                     "title": title,
-                    "companion_hint": companion_handoff,
                     "usage": _usage_payload(current_agent),
                     "task": _agent_task_status(current_agent),
                     "recovery_task": _agent_task_recovery(current_agent),
@@ -301,13 +291,6 @@ def run_server(
             stdout(json.dumps({
                 "type": "memory",
                 "text": _format_memory_status(status),
-            }, ensure_ascii=False))
-
-        elif cmd == "companion":
-            status = current_agent.companion_status()
-            stdout(json.dumps({
-                "type": "companion",
-                "text": status.get("text", "暂无陪伴状态。"),
             }, ensure_ascii=False))
 
         elif cmd == "debug_context":

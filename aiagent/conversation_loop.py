@@ -778,14 +778,6 @@ def run_conversation_loop(
                 saved = memory_result.get("saved", [])
                 if on_status and saved:
                     on_status({"type": "memory_saved", "count": len(saved)})
-            companion_due = getattr(agent, "companion_review_due", None)
-            review_companion = getattr(agent, "review_companion_state", None)
-            if callable(companion_due) and callable(review_companion) and companion_due():
-                if on_status:
-                    on_status({"type": "companion_check"})
-                companion_result = review_companion()
-                if on_status and companion_result.get("changed"):
-                    on_status({"type": "companion_updated"})
         return final_text
 
     return "已达到最大迭代次数，未能得到最终回答。"

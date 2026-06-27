@@ -24,10 +24,6 @@ class ContextAgent:
         self.system_prompt = "system"
         self.memory_manager = FakeMemoryManager()
         self.history_recall_config = {"enabled": False}
-        self.companion_context = ""
-
-    def companion_continuation_context(self, user_message):
-        return self.companion_context
 
 
 class TurnContextTests(unittest.TestCase):
@@ -48,7 +44,6 @@ class TurnContextTests(unittest.TestCase):
             system_prompt="system",
             memory_context="memory",
             history_context="history",
-            companion_context="companion",
             task_context="task",
         )
 
@@ -56,21 +51,18 @@ class TurnContextTests(unittest.TestCase):
 
         self.assertEqual(
             [message["content"] for message in messages],
-            ["system", "memory", "history", "companion", "task", "hello"],
+            ["system", "memory", "history", "task", "hello"],
         )
         self.assertTrue(turn.summary()["has_task_context"])
 
     def test_build_turn_context_collects_ephemeral_context_and_status(self):
         agent = ContextAgent()
-        agent.companion_context = "<session-continuation>继续</session-continuation>"
         statuses = []
 
         turn = build_turn_context(agent, "继续", on_status=statuses.append)
 
         self.assertIn("<memory-context>", turn.memory_context)
         self.assertIn("&lt;unsafe&gt;", turn.memory_context)
-        self.assertTrue(turn.companion_resumed)
-        self.assertIn({"type": "companion_resume"}, statuses)
         self.assertEqual(agent.memory_manager.calls, [("继续", 5)])
 
     def test_build_turn_context_records_errors_without_raising(self):

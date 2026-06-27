@@ -129,19 +129,13 @@ class AgentBackgroundMaintenanceTests(unittest.TestCase):
         agent.model = "test-model"
         agent.workspace = "workspace"
         agent.memory_review_due = lambda: True
-        agent.companion_review_due = lambda: True
         reviewed = {}
 
         def review_memory(messages=None):
             reviewed["memory"] = messages
             return {"saved": [{"content": "saved"}]}
 
-        def review_companion(messages=None, conversation_id=None):
-            reviewed["companion"] = (messages, conversation_id)
-            return {"changed": True}
-
         agent.review_recent_memory = review_memory
-        agent.review_companion_state = review_companion
         snapshot = [
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "answer"},
@@ -156,12 +150,11 @@ class AgentBackgroundMaintenanceTests(unittest.TestCase):
 
         self.assertEqual(
             [job["name"] for job in result["queued"]],
-            ["memory_sync", "memory_review", "companion_review"],
+            ["memory_sync", "memory_review"],
         )
         self.assertTrue(agent.background_jobs.wait_idle(timeout=2))
         self.assertEqual(agent.memory_manager.sync_calls[0][0:2], ("hello", "answer"))
         self.assertEqual(reviewed["memory"], snapshot)
-        self.assertEqual(reviewed["companion"], (snapshot, "conv-1"))
 
 
 class FakeJobsAgent:

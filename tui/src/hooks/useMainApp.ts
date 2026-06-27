@@ -163,7 +163,7 @@ export function useMainApp(gw: Gateway): MainApp {
         case "/help":
           appendMessage({
             role: "system",
-            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /companion  /debug-context  /jobs  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
+            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /debug-context  /jobs  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
           });
           break;
         case "/new":
@@ -215,11 +215,6 @@ export function useMainApp(gw: Gateway): MainApp {
           setBusy(true);
           setStatusText("reading memory");
           gw.send({ cmd: "memory" });
-          break;
-        case "/companion":
-          setBusy(true);
-          setStatusText("reading companion state");
-          gw.send({ cmd: "companion" });
           break;
         case "/debug-context":
           setBusy(true);
@@ -426,9 +421,6 @@ export function useMainApp(gw: Gateway): MainApp {
           setStarted(true);
           if (ev.usage) setUsage(ev.usage);
           if (ev.task !== undefined) setTaskPlan(ev.task || null);
-          if (ev.companion_hint) {
-            appendMessage({ role: "system", text: ev.companion_hint });
-          }
           if (ev.recovery_task) {
             setPendingTaskRecovery(ev.recovery_task);
             setTaskRecoverySelectedIndex(0);
@@ -440,9 +432,6 @@ export function useMainApp(gw: Gateway): MainApp {
           if (ev.title) setLastQuery(ev.title);
           if (ev.usage) setUsage(ev.usage);
           if (ev.task !== undefined) setTaskPlan(ev.task || null);
-          if (ev.companion_hint) {
-            appendMessage({ role: "system", text: ev.companion_hint });
-          }
           if (ev.recovery_task) {
             setPendingTaskRecovery(ev.recovery_task);
             setTaskRecoverySelectedIndex(0);
@@ -490,20 +479,14 @@ export function useMainApp(gw: Gateway): MainApp {
         case "memory_saved":
           setStatusText(`remembered ${ev.count || 1}`);
           break;
-        case "companion_check":
-          setStatusText("updating companion state");
-          break;
-        case "companion_updated":
-          setStatusText("companion state updated");
-          break;
-        case "companion_resume":
-          setStatusText("continuing companion thread");
-          break;
         case "background_jobs_queued":
           setStatusText(`queued ${ev.count || 1} background job${(ev.count || 1) > 1 ? "s" : ""}`);
           break;
         case "history_recall":
           setStatusText(`recalled ${ev.count || 1} history`);
+          break;
+        case "context_references":
+          setStatusText(`attached ${ev.count || 1} reference${(ev.count || 1) > 1 ? "s" : ""}`);
           break;
         case "plan_updated":
           setTaskPlan(ev.task || null);
@@ -674,11 +657,6 @@ export function useMainApp(gw: Gateway): MainApp {
           break;
         case "memory":
           appendMessage({ role: "system", text: ev.text || "暂无记忆" });
-          setBusy(false);
-          break;
-        case "companion":
-          appendMessage({ role: "system", text: ev.text || "暂无陪伴状态。" });
-          setStatusText("");
           setBusy(false);
           break;
         case "debug_context":

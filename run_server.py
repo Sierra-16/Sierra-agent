@@ -47,7 +47,7 @@ def make_agent(model_key):
         task_config=config.get("tasks", {}),
         skill_config=config.get("skills", {}),
         session_config=config.get("sessions", {}),
-        companion_config=config.get("companion", {}),
+        # companion_config=config.get("companion", {}),
         background_config=config.get("background_jobs", {}),
         context_config=config.get("context", {}),
         workspace=os.getcwd(),

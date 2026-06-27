@@ -73,7 +73,6 @@ export interface ServerEvent {
   model?: string;
   cwd?: string;
   recent?: { id: string; title: string } | null;
-  companion_hint?: string;
   convs?: { id: string; title: string }[];
   sessions?: {
     id: string;

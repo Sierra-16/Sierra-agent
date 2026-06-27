@@ -26,7 +26,6 @@ export const COMMANDS: CommandDefinition[] = [
   { cmd: "/compress", desc: "压缩上下文" },
   { cmd: "/task", desc: "查看任务计划" },
   { cmd: "/task-cancel", desc: "放弃当前任务" },
-  { cmd: "/companion", desc: "查看陪伴状态" },
   { cmd: "/debug-context", desc: "查看上下文摘要" },
   { cmd: "/jobs", desc: "查看后台队列" },
   { cmd: "/memory", desc: "查看记忆状态" },

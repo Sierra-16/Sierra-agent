@@ -66,7 +66,6 @@ def main():
         task_config=config.get("tasks", {}),
         skill_config=config.get("skills", {}),
         session_config=config.get("sessions", {}),
-        companion_config=config.get("companion", {}),
         background_config=config.get("background_jobs", {}),
         context_config=config.get("context", {}),
         workspace=os.getcwd(),
@@ -86,11 +85,6 @@ def main():
         print(LINE)
     else:
         print("💡 输入 /help 查看命令    Ctrl+C 退出")
-        print(LINE)
-
-    companion_handoff = agent.companion_handoff()
-    if companion_handoff:
-        print(companion_handoff)
         print(LINE)
 
     recovery_task = agent.task_recovery()
@@ -162,7 +156,6 @@ def _handle_command(cmd, agent):
 /compress   压缩上下文
 /task       查看当前任务计划
 /task-cancel 放弃当前任务
-/companion 查看陪伴状态
 /debug-context 查看上一轮模型上下文摘要
 /jobs      查看后台维护队列
 /skills     查看技能索引与就绪状态
@@ -260,8 +253,6 @@ def _handle_command(cmd, agent):
         else:
             agent.abandon_task(task["id"])
             print("已放弃当前任务")
-    elif cmd == "/companion":
-        print(agent.companion_status().get("text", "暂无陪伴状态。"))
     elif cmd == "/debug-context":
         print(agent.debug_context_status().get("text", "暂无 TurnContext。"))
     elif cmd == "/jobs":

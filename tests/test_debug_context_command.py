@@ -19,7 +19,6 @@ class FakeDebugContextAgent:
             user_message="继续",
             system_prompt="system",
             memory_context="memory",
-            companion_context="active",
             estimated_context_tokens=123,
         )
         self.closed = False
@@ -55,7 +54,6 @@ class DebugContextCommandTests(unittest.TestCase):
         self.assertTrue(status["available"])
         self.assertIn("TurnContext", status["text"])
         self.assertIn("memory 0", status["text"])
-        self.assertIn("active_state", status["text"])
         self.assertEqual(status["summary"]["estimated_context_tokens"], 123)
 
     def test_agent_handles_missing_turn_context(self):

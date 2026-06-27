@@ -6,10 +6,6 @@ import time
 
 from .background_jobs import BackgroundJobQueue
 from .conversation_store import ConversationStore
-from .companion_state import (
-    CompanionStateManager,
-    parse_companion_update,
-)
 from .session_db import SessionDB
 from .llm import LLMClient
 from .tools.registry import registry
@@ -104,7 +100,6 @@ class Agent:
         task_config=None,
         skill_config=None,
         session_config=None,
-        companion_config=None,
         background_config=None,
         context_config=None,
         workspace=None,
@@ -168,23 +163,6 @@ class Agent:
             1000,
             int(memory_config.get("review_max_chars", 16000)),
         )
-        companion_config = companion_config if isinstance(companion_config, dict) else {}
-        self.companion_state = None
-        try:
-            self.companion_state = CompanionStateManager.from_config(
-                companion_config,
-                base_dir=self.sierra_dir,
-            )
-        except Exception as exc:
-            logger.warning("Companion state disabled: %s", exc)
-        self.companion_review_interval = max(
-            0,
-            int(companion_config.get("review_interval", self.memory_review_interval)),
-        )
-        self.companion_review_max_chars = max(
-            1000,
-            int(companion_config.get("review_max_chars", self.memory_review_max_chars)),
-        )
         self.store = ConversationStore()
         session_config = session_config if isinstance(session_config, dict) else {}
         self.history_recall_config = (
@@ -219,7 +197,6 @@ class Agent:
             self.tools.unregister("get_plan")
             self.tools.unregister("resolve_task_execution")
         self._turns_since_memory_review = 0
-        self._turns_since_companion_review = 0
         context_config = context_config if isinstance(context_config, dict) else {}
         self.model_context_window = max(1, int(context_window))
         self.context_window = _resolve_prompt_budget(
@@ -439,13 +416,6 @@ class Agent:
         ]
         if memory_text:
             extra_parts.append(memory_text)
-        companion_state = getattr(self, "companion_state", None)
-        if companion_state is not None:
-            companion_text = companion_state.prompt_context(
-                getattr(self, "conv_id", None)
-            )
-            if companion_text:
-                extra_parts.append(companion_text)
         skills_prompt = self.skill_index.build(
             self.skills,
             available_tools=self.tools.names(),
@@ -574,16 +544,6 @@ class Agent:
             )
             queued.append(job)
 
-        companion_due = getattr(self, "companion_review_due", None)
-        review_companion = getattr(self, "review_companion_state", None)
-        if callable(companion_due) and callable(review_companion) and companion_due():
-            job = queue.submit(
-                "companion_review",
-                lambda: self._run_companion_review_job(snapshot, conversation_id),
-                metadata=metadata,
-            )
-            queued.append(job)
-
         if on_status and queued:
             try:
                 on_status({
@@ -611,11 +571,6 @@ class Agent:
             self._sync_memory_turn_now(user_message, assistant_message, metadata)
         if self.memory_review_due():
             self.review_recent_memory(messages=messages_snapshot)
-        if self.companion_review_due():
-            self.review_companion_state(
-                messages=messages_snapshot,
-                conversation_id=getattr(self, "conv_id", None),
-            )
         return {"queued": []}
 
     def _sync_memory_turn_now(self, user_message, assistant_message, metadata):
@@ -641,15 +596,6 @@ class Agent:
         if isinstance(result, dict) and result.get("error"):
             summary["error"] = result.get("error")
         return summary
-
-    def _run_companion_review_job(self, messages_snapshot, conversation_id):
-        result = self.review_companion_state(
-            messages=messages_snapshot,
-            conversation_id=conversation_id,
-        )
-        return {
-            "changed": bool(result.get("changed")) if isinstance(result, dict) else False,
-        }
 
     def background_jobs_status(self, limit=20):
         queue = getattr(self, "background_jobs", None)
@@ -757,105 +703,6 @@ class Agent:
         except Exception as e:
             return {"saved": [], "error": str(e)}
 
-    def companion_review_due(self):
-        """Record a completed turn and report whether companion state review is due."""
-        companion_state = getattr(self, "companion_state", None)
-        interval = int(getattr(self, "companion_review_interval", 0) or 0)
-        if companion_state is None or interval <= 0:
-            return False
-        self._turns_since_companion_review = (
-            int(getattr(self, "_turns_since_companion_review", 0) or 0) + 1
-        )
-        return self._turns_since_companion_review >= interval
-
-    def review_companion_state(self, messages=None, conversation_id=None):
-        """Refresh Sierra's current conversation active state from recent turns."""
-        self._turns_since_companion_review = 0
-        companion_state = getattr(self, "companion_state", None)
-        if companion_state is None:
-            return {"changed": False}
-
-        transcript = self._build_companion_review_transcript(messages)
-        if not transcript:
-            return {"changed": False}
-
-        session_id = (
-            getattr(self, "conv_id", None)
-            if conversation_id is None
-            else conversation_id
-        )
-        current_state = companion_state.load(session_id)
-        prompt = (
-            "你是 Sierra 的当前会话状态整理器。请根据近期对话，更新当前会话的 active_state。\n"
-            "只返回严格 JSON，不要解释，不要 Markdown。\n"
-            "格式: {\"current_focus\":\"...\",\"recent_mood\":\"...\",\"open_threads\":[\"...\"]}\n\n"
-            "规则:\n"
-            "- current_focus: 当前会话里用户近期最主要的目标、问题或项目。\n"
-            "- recent_mood: 当前会话里用户明显的临时状态或情绪；不确定就留空。\n"
-            "- open_threads: 当前会话尚未收束、下次应该接上的具体线索，最多 8 条。\n"
-            "- 不记录长期偏好、身份、项目事实或人格设定；这些应交给 USER.md / MEMORY.md / SOUL.md。\n"
-            "- 不记录一次性细节、密钥、隐私凭证、完整代码。\n"
-            "- 如果旧状态仍然准确，可以原样返回；如果没有信息，字段留空或返回空列表。"
-        )
-        review_content = (
-            "【当前会话状态】\n"
-            f"{json.dumps(current_state, ensure_ascii=False, indent=2)}\n\n"
-            "【近期对话】\n"
-            f"{transcript}"
-        )
-
-        try:
-            response = self.llm.chat([
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": review_content},
-            ])
-            self.count_tokens(response["usage"])
-            updates = parse_companion_update(response.get("content") or "")
-            result = companion_state.update(
-                updates,
-                session_id,
-            )
-            if result.get("changed"):
-                self.refresh_system_prompt()
-            return result
-        except Exception as exc:
-            return {"changed": False, "error": str(exc)}
-
-    def _build_companion_review_transcript(self, messages=None):
-        turns = []
-        current = None
-
-        for message in (messages if messages is not None else self.messages):
-            role = message.get("role")
-            content = message.get("content")
-            if role == "user":
-                if current and current.get("assistant"):
-                    turns.append(current)
-                current = {"user": str(content or ""), "assistant": ""}
-            elif role == "assistant" and current and content:
-                current["assistant"] = str(content)
-
-        if current and current.get("assistant"):
-            turns.append(current)
-
-        interval = max(1, int(getattr(self, "companion_review_interval", 1) or 1))
-        max_chars = int(getattr(self, "companion_review_max_chars", 16000) or 16000)
-        recent_turns = turns[-interval:]
-        blocks = []
-        used_chars = 0
-        for turn in reversed(recent_turns):
-            block = (
-                f"用户:\n{turn['user'][:1200]}\n"
-                f"Sierra:\n{turn['assistant'][:2000]}"
-            )
-            if blocks and used_chars + len(block) > max_chars:
-                break
-            blocks.append(block[:max_chars])
-            used_chars += len(block)
-
-        blocks.reverse()
-        return "\n\n---\n\n".join(blocks)
-
     def _build_memory_review_transcript(self, messages=None):
         turns = []
         current = None
@@ -901,18 +748,6 @@ class Agent:
                 completed_user_turns % self.memory_review_interval
             )
 
-        companion_state = getattr(self, "companion_state", None)
-        companion_interval = int(getattr(self, "companion_review_interval", 0) or 0)
-        if companion_state is None or companion_interval <= 0:
-            self._turns_since_companion_review = 0
-            return
-        completed_user_turns = sum(
-            1 for message in self.messages if message.get("role") == "user"
-        )
-        self._turns_since_companion_review = (
-            completed_user_turns % companion_interval
-        )
-
     def _parse_memory_operations(self, text):
         raw = text.strip()
         if raw.startswith("```"):
@@ -948,7 +783,6 @@ class Agent:
             task_manager.bind_conversation(None)
         self.messages = []
         self._turns_since_memory_review = 0
-        self._turns_since_companion_review = 0
         self.current_context_tokens = 0
         self.context_tokens_estimated = False
         self._ineffective_compression_count = 0
@@ -1099,39 +933,6 @@ class Agent:
     def memory_clear(self):
         return self.memory_manager.clear()
 
-    def companion_status(self):
-        companion_state = getattr(self, "companion_state", None)
-        if companion_state is None:
-            return {"enabled": False, "text": "陪伴状态模块未启用。"}
-        return {
-            "enabled": True,
-            "state": companion_state.load(getattr(self, "conv_id", None)),
-            "text": companion_state.display_text(getattr(self, "conv_id", None)),
-        }
-
-    def companion_handoff(self):
-        companion_state = getattr(self, "companion_state", None)
-        if companion_state is None:
-            return ""
-        return companion_state.handoff(getattr(self, "conv_id", None))
-
-    def companion_continuation_context(self, user_message):
-        companion_state = getattr(self, "companion_state", None)
-        if companion_state is None:
-            return ""
-        return companion_state.continuation_context(
-            user_message,
-            getattr(self, "conv_id", None),
-        )
-
-    def companion_clear(self):
-        companion_state = getattr(self, "companion_state", None)
-        if companion_state is None:
-            return {"ok": False, "error": "陪伴状态模块未启用。"}
-        state = companion_state.clear(getattr(self, "conv_id", None))
-        self.refresh_system_prompt()
-        return {"ok": True, "state": state}
-
     def debug_context_status(self):
         turn_context = getattr(self, "last_turn_context", None)
         if turn_context is None:
@@ -1147,8 +948,6 @@ class Agent:
             flags.append(f"memory {summary.get('memory_recall_count', 0)}")
         if summary.get("has_history_context"):
             flags.append(f"history {summary.get('history_recall_count', 0)}")
-        if summary.get("has_companion_context"):
-            flags.append("active_state")
         if summary.get("has_task_context"):
             flags.append("task_plan")
         if not flags:
@@ -1169,7 +968,7 @@ class Agent:
                 "tokens": estimate_tokens([
                     {"role": "system", "content": getattr(turn_context, "system_prompt", "")}
                 ]),
-                "note": "persona + model + curated memory + active state + compact skill index",
+                "note": "persona + model + curated memory + compact skill index",
             },
             {
                 "name": "memory_context",
@@ -1184,13 +983,6 @@ class Agent:
                     {"role": "system", "content": getattr(turn_context, "history_context", "")}
                 ]),
                 "note": "session DB recall when the user asks for old context",
-            },
-            {
-                "name": "companion_context",
-                "tokens": estimate_tokens([
-                    {"role": "system", "content": getattr(turn_context, "companion_context", "")}
-                ]),
-                "note": "ephemeral continuation hint",
             },
             {
                 "name": "task_context",
