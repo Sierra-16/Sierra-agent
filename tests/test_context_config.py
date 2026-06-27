@@ -38,6 +38,15 @@ class ContextConfigTests(unittest.TestCase):
 
         self.assertEqual(window, 256_000)
 
+    def test_compression_window_can_follow_prompt_budget(self):
+        window = _resolve_compression_window(
+            1_000_000,
+            {"compression_context_window": "prompt"},
+            prompt_context_window=256_000,
+        )
+
+        self.assertEqual(window, 256_000)
+
 
 if __name__ == "__main__":
     unittest.main()

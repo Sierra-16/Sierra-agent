@@ -9,6 +9,7 @@ import type { ComposerActions, ComposerRefs, ComposerState } from "./useComposer
 import { useSubmission } from "./useSubmission.js";
 import { useInputHandlers } from "./useInputHandlers.js";
 import type { ModelOption } from "../components/ModelPicker.js";
+import type { CronTaskOption } from "../gateway.js";
 
 export interface Message {
   role: "user" | "assistant" | "system" | "error";
@@ -18,7 +19,7 @@ export interface Message {
 export interface ToolTrace {
   id: string;
   name: string;
-  status: "running" | "done";
+  status: "running" | "done" | "failed";
   text?: string;
 }
 
@@ -78,10 +79,19 @@ export interface MainApp {
     models: ModelOption[];
     selectedIndex: number;
   };
+  cronRemovePicker: {
+    open: boolean;
+    loading: boolean;
+    tasks: CronTaskOption[];
+    selectedIndex: number;
+  };
   handleCommand: (cmd: string) => void;
   closeModelPicker: () => void;
   moveModelSelection: (delta: number) => void;
   confirmModelSelection: () => void;
+  closeCronRemovePicker: () => void;
+  moveCronRemoveSelection: (delta: number) => void;
+  confirmCronRemoveSelection: () => void;
   confirmToolApproval: (decision: ToolApprovalDecision) => void;
   moveUserInputSelection: (delta: number) => void;
   submitUserInput: (text: string) => void;
@@ -120,6 +130,10 @@ export function useMainApp(gw: Gateway): MainApp {
   const [modelPickerLoading, setModelPickerLoading] = useState(false);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModelIndex, setSelectedModelIndex] = useState(0);
+  const [cronRemovePickerOpen, setCronRemovePickerOpen] = useState(false);
+  const [cronRemovePickerLoading, setCronRemovePickerLoading] = useState(false);
+  const [cronRemoveTasks, setCronRemoveTasks] = useState<CronTaskOption[]>([]);
+  const [selectedCronRemoveIndex, setSelectedCronRemoveIndex] = useState(0);
 
   const composer = useComposerState();
   const streamingTextRef = useRef("");
@@ -163,7 +177,7 @@ export function useMainApp(gw: Gateway): MainApp {
         case "/help":
           appendMessage({
             role: "system",
-            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /debug-context  /jobs  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
+            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /undo [n]  /retry  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /debug-context  /jobs  /cron  /cron-add <分钟> <提示>  /cron-remove  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
           });
           break;
         case "/new":
@@ -195,6 +209,18 @@ export function useMainApp(gw: Gateway): MainApp {
           setStatusText("loading session");
           gw.send({ cmd: "session_load", id: argument });
           break;
+        case "/undo": {
+          const count = argument && /^\d+$/.test(argument) ? Number(argument) : 1;
+          setBusy(true);
+          setStatusText("undoing");
+          gw.send({ cmd: "undo", count });
+          break;
+        }
+        case "/retry":
+          setBusy(true);
+          setStatusText("retrying");
+          gw.send({ cmd: "retry" });
+          break;
         case "/reset":
           gw.send({ cmd: "new" }); setMessages([]); setLastQuery(""); resetLiveOutput();
           setTaskPlan(null); setPendingTaskRecovery(null);
@@ -225,6 +251,34 @@ export function useMainApp(gw: Gateway): MainApp {
           setBusy(true);
           setStatusText("reading background jobs");
           gw.send({ cmd: "jobs" });
+          break;
+        case "/cron":
+          setBusy(true);
+          setStatusText("reading cron");
+          gw.send({ cmd: "cron" });
+          break;
+        case "/cron-add": {
+          const match = argument.match(/^(\d+)\s+(.+)$/);
+          if (!match) {
+            appendMessage({ role: "system", text: "用法: /cron-add <分钟> <提示>" });
+            break;
+          }
+          setBusy(true);
+          setStatusText("creating cron");
+          gw.send({ cmd: "cron_add", interval_minutes: Number(match[1]), prompt: match[2] });
+          break;
+        }
+        case "/cron-remove":
+          if (!argument) {
+            setCronRemovePickerOpen(true);
+            setCronRemovePickerLoading(true);
+            setSelectedCronRemoveIndex(0);
+            gw.send({ cmd: "cron_remove_options" });
+            break;
+          }
+          setBusy(true);
+          setStatusText("removing cron");
+          gw.send({ cmd: "cron_remove", id: argument });
           break;
         case "/memory-search":
           if (!argument) {
@@ -290,6 +344,28 @@ export function useMainApp(gw: Gateway): MainApp {
     setModelPickerLoading(true);
     gw.send({ cmd: "set_model", key: selected.key });
   }, [gw, models, selectedModelIndex]);
+
+  const closeCronRemovePicker = useCallback(() => {
+    setCronRemovePickerOpen(false);
+    setCronRemovePickerLoading(false);
+  }, []);
+
+  const moveCronRemoveSelection = useCallback((delta: number) => {
+    setSelectedCronRemoveIndex((prev) => {
+      if (cronRemoveTasks.length === 0) return 0;
+      return (prev + delta + cronRemoveTasks.length) % cronRemoveTasks.length;
+    });
+  }, [cronRemoveTasks.length]);
+
+  const confirmCronRemoveSelection = useCallback(() => {
+    const selected = cronRemoveTasks[selectedCronRemoveIndex];
+    if (!selected) return;
+    setCronRemovePickerOpen(false);
+    setCronRemovePickerLoading(false);
+    setBusy(true);
+    setStatusText("removing cron");
+    gw.send({ cmd: "cron_remove", id: selected.id, confirmed: true });
+  }, [cronRemoveTasks, gw, selectedCronRemoveIndex]);
 
   const confirmToolApproval = useCallback((decision: ToolApprovalDecision) => {
     const pending = pendingToolApprovalRef.current;
@@ -400,6 +476,10 @@ export function useMainApp(gw: Gateway): MainApp {
     closeModelPicker,
     moveModelSelection,
     confirmModelSelection,
+    cronRemovePickerOpen,
+    closeCronRemovePicker,
+    moveCronRemoveSelection,
+    confirmCronRemoveSelection,
     pendingToolApproval,
     confirmToolApproval,
     pendingUserInput,
@@ -421,6 +501,12 @@ export function useMainApp(gw: Gateway): MainApp {
           setStarted(true);
           if (ev.usage) setUsage(ev.usage);
           if (ev.task !== undefined) setTaskPlan(ev.task || null);
+          if (ev.cron_due?.length) {
+            appendMessage({
+              role: "system",
+              text: "定时提示到期:\n" + ev.cron_due.map((task) => `- ${task.prompt}`).join("\n"),
+            });
+          }
           if (ev.recovery_task) {
             setPendingTaskRecovery(ev.recovery_task);
             setTaskRecoverySelectedIndex(0);
@@ -554,7 +640,7 @@ export function useMainApp(gw: Gateway): MainApp {
             const doneEvent = {
               id: `${Date.now()}-${prev.length}-${name}`,
               name,
-              status: "done" as const,
+              status: ev.success === false ? "failed" as const : "done" as const,
               text,
             };
             if (idx === -1) return [...next.slice(-5), doneEvent];
@@ -655,6 +741,35 @@ export function useMainApp(gw: Gateway): MainApp {
             appendMessage({ role: "error", text: ev.text || "加载历史会话失败。" });
           }
           break;
+        case "history_changed":
+          setStatusText("");
+          setBusy(false);
+          if (ev.messages) setMessages(ev.messages as Message[]);
+          if (ev.usage) setUsage(ev.usage);
+          if (ev.task !== undefined) setTaskPlan(ev.task || null);
+          appendMessage({
+            role: ev.success === false ? "error" : "system",
+            text: ev.text || "history changed",
+          });
+          break;
+        case "retry_ready": {
+          setStatusText("retrying");
+          if (ev.messages) setMessages(ev.messages as Message[]);
+          if (ev.usage) setUsage(ev.usage);
+          if (ev.task !== undefined) setTaskPlan(ev.task || null);
+          const query = ev.query || "";
+          if (!query) {
+            appendMessage({ role: "error", text: "没有可重试的上一轮。" });
+            setBusy(false);
+            break;
+          }
+          resetLiveOutput();
+          appendMessage({ role: "system", text: ev.text || "retrying previous turn" });
+          appendMessage({ role: "user", text: query });
+          setBusy(true);
+          gw.send({ cmd: "chat", text: query });
+          break;
+        }
         case "memory":
           appendMessage({ role: "system", text: ev.text || "暂无记忆" });
           setBusy(false);
@@ -668,6 +783,33 @@ export function useMainApp(gw: Gateway): MainApp {
           appendMessage({ role: "system", text: ev.text || "No background jobs." });
           setStatusText("");
           setBusy(false);
+          break;
+        case "cron":
+          appendMessage({
+            role: ev.success === false ? "error" : "system",
+            text: ev.text || "No scheduled reminders.",
+          });
+          setStatusText("");
+          setBusy(false);
+          break;
+        case "cron_remove_options": {
+          const tasks = ev.tasks || [];
+          setCronRemoveTasks(tasks);
+          setSelectedCronRemoveIndex(0);
+          setCronRemovePickerOpen(true);
+          setCronRemovePickerLoading(false);
+          if (tasks.length === 0) {
+            appendMessage({ role: "system", text: "暂无可删除的定时提示。" });
+          }
+          break;
+        }
+        case "cron_due":
+          if (ev.tasks?.length) {
+            appendMessage({
+              role: "system",
+              text: ev.text || "定时提示到期:\n" + ev.tasks.map((task) => `- ${task.prompt}`).join("\n"),
+            });
+          }
           break;
         case "memory_search":
           appendMessage({ role: "system", text: ev.text || "没有找到相关向量记忆。" });
@@ -730,6 +872,12 @@ export function useMainApp(gw: Gateway): MainApp {
           setStatusText("");
           setBusy(false);
           break;
+        case "skill_suggestion":
+          appendMessage({
+            role: "system",
+            text: ev.text || "This workflow may be worth turning into a skill.",
+          });
+          break;
         case "mcp": {
           const servers = ev.status?.servers || [];
           const lines = servers.length
@@ -776,7 +924,33 @@ export function useMainApp(gw: Gateway): MainApp {
     });
 
     gw.send({ cmd: "init", cwd: process.cwd() });
-  }, [appendMessage, resetStreamingText]);
+  }, [appendMessage, resetLiveOutput, resetStreamingText, gw]);
+
+  useEffect(() => {
+    if (
+      !started ||
+      busy ||
+      pendingToolApproval ||
+      pendingUserInput ||
+      pendingTaskRecovery ||
+      cronRemovePickerOpen
+    ) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      gw.send({ cmd: "cron_due" });
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [
+    busy,
+    cronRemovePickerOpen,
+    gw,
+    pendingTaskRecovery,
+    pendingToolApproval,
+    pendingUserInput,
+    started,
+  ]);
 
   function stop() { gw.stop(); }
 
@@ -791,7 +965,15 @@ export function useMainApp(gw: Gateway): MainApp {
       models,
       selectedIndex: selectedModelIndex,
     },
-    handleCommand, closeModelPicker, moveModelSelection, confirmModelSelection, confirmToolApproval,
+    cronRemovePicker: {
+      open: cronRemovePickerOpen,
+      loading: cronRemovePickerLoading,
+      tasks: cronRemoveTasks,
+      selectedIndex: selectedCronRemoveIndex,
+    },
+    handleCommand, closeModelPicker, moveModelSelection, confirmModelSelection,
+    closeCronRemovePicker, moveCronRemoveSelection, confirmCronRemoveSelection,
+    confirmToolApproval,
     moveUserInputSelection, submitUserInput, cancelUserInput,
     moveTaskRecoverySelection, confirmTaskRecovery, stop,
   };

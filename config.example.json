@@ -5,6 +5,7 @@
       "get_time",
       "list_directory",
       "search_files",
+      "browser_fetch",
       "skills_list",
       "skill_view",
       "skill_render_template",
@@ -13,7 +14,8 @@
       "request_user_input",
       "update_plan",
       "get_plan",
-      "resolve_task_execution"
+      "resolve_task_execution",
+      "cron_list"
     ],
     "ask": [
       "write_file",
@@ -22,6 +24,8 @@
       "memory_forget",
       "memory_clear",
       "powershell",
+      "cron_add",
+      "cron_remove",
       "skill_run_script",
       "skill_manage",
       "mcp__*"
@@ -52,10 +56,20 @@
     "enabled": true,
     "max_history": 100
   },
+  "cron": {
+    "enabled": true,
+    "path": "tasks/cron_tasks.json"
+  },
   "context": {
     "enabled": true,
-    "max_prompt_tokens": 120000,
-    "compression_context_window": "model",
+    "context_files": {
+      "enabled": true,
+      "files": ["SIERRA.md", "AGENTS.md", ".sierra/context.md"],
+      "max_chars": 12000,
+      "max_file_chars": 5000
+    },
+    "max_prompt_tokens": 256000,
+    "compression_context_window": "prompt",
     "compression_threshold": 0.8,
     "target_ratio": 0.2,
     "keep_recent_ratio": 0.25,

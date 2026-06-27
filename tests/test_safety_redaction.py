@@ -13,8 +13,17 @@ class SafetyRedactionTests(unittest.TestCase):
         self.assertEqual(gate.assess("skills_list").level, "low")
         self.assertEqual(gate.assess("skill_render_template").level, "low")
         self.assertEqual(gate.assess("skill_usage_stats").level, "low")
+        self.assertEqual(gate.assess("browser_fetch", {"url": "https://example.com"}).level, "low")
+        self.assertEqual(gate.assess("mcp__docs__search", {"query": "Sierra"}).level, "low")
         self.assertEqual(gate.assess("skill_run_script").level, "high")
         self.assertEqual(gate.assess("skill_manage").level, "high")
+
+    def test_cron_mutations_are_medium_risk(self):
+        gate = SafetyGate()
+
+        self.assertEqual(gate.assess("cron_list").level, "low")
+        self.assertEqual(gate.assess("cron_add").level, "medium")
+        self.assertEqual(gate.assess("cron_remove").level, "medium")
 
     def test_sensitive_file_reads_still_require_approval(self):
         gate = SafetyGate()

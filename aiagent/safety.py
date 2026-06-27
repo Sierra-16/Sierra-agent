@@ -15,6 +15,7 @@ LOW_RISK_TOOLS = {
     "search_files",
     "web_fetch",
     "web_search",
+    "browser_fetch",
     "skills_list",
     "skill_view",
     "skill_render_template",
@@ -24,15 +25,20 @@ LOW_RISK_TOOLS = {
     "update_plan",
     "get_plan",
     "resolve_task_execution",
+    "cron_list",
 }
 
 MEDIUM_RISK_TOOLS = {
+    "cron_add",
+    "cron_remove",
 }
 
 HIGH_RISK_TOOLS = {
     "write_file",
     "save_memory",
     "delete_memory",
+    "memory_forget",
+    "memory_clear",
     "powershell",
     "skill_run_script",
     "skill_manage",
@@ -117,25 +123,28 @@ class SafetyGate:
             return self._assess_mcp(normalized)
 
         if normalized == "powershell":
-            return ToolRisk("high", "该工具会执行任意 PowerShell 命令并可能修改系统状态")
+            return ToolRisk(
+                "high",
+                "该工具会执行 PowerShell 命令，可能修改本地或系统状态",
+            )
+
+        if normalized == "read_file" and self._reads_sensitive_path(arguments):
+            return ToolRisk("high", "读取目标可能包含密钥、配置或凭证")
 
         if normalized in HIGH_RISK_TOOLS:
             return ToolRisk("high", "该工具会修改本地状态、文件或长期记忆")
 
-        if normalized == "read_file" and self._reads_sensitive_path(arguments):
-            return ToolRisk("high", "该读取目标可能包含密钥、配置或凭证")
-
         if normalized in MEDIUM_RISK_TOOLS:
-            return ToolRisk("medium", "该工具会读取文件、访问网络或暴露外部信息")
+            return ToolRisk("medium", "该工具会创建或修改 Sierra 的自动化状态")
 
         if normalized in LOW_RISK_TOOLS:
             return ToolRisk("low", "只读或本地低风险工具")
 
         if any(keyword in normalized for keyword in DANGEROUS_KEYWORDS):
-            return ToolRisk("high", "工具名包含写入、删除、执行或发送类高风险动作")
+            return ToolRisk("high", "工具名包含写入、删除、执行或发送类动作")
 
         if any(keyword in normalized for keyword in READ_KEYWORDS):
-            return ToolRisk("medium", "未知只读类工具，执行前需要确认")
+            return ToolRisk("low", "未知只读或检索类工具，默认允许执行")
 
         return ToolRisk("medium", "未知工具，执行前需要确认")
 
@@ -144,7 +153,7 @@ class SafetyGate:
             return ToolRisk("high", "外部 MCP 工具可能执行写入、删除、命令或发送操作")
 
         if any(keyword in normalized_name for keyword in READ_KEYWORDS):
-            return ToolRisk("medium", "外部 MCP 工具会读取或查询信息")
+            return ToolRisk("low", "外部 MCP 只读或检索工具")
 
         return ToolRisk("medium", "外部 MCP 工具能力未知")
 
@@ -179,7 +188,10 @@ def _redact_value(key: str, value: Any) -> Any:
         return f"*** redacted ({len(value_text)} chars) ***"
 
     if isinstance(value, dict):
-        return {nested_key: _redact_value(str(nested_key), nested_value) for nested_key, nested_value in value.items()}
+        return {
+            nested_key: _redact_value(str(nested_key), nested_value)
+            for nested_key, nested_value in value.items()
+        }
 
     if isinstance(value, list):
         return [_redact_value(key, item) for item in value[:20]]

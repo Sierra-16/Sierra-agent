@@ -21,6 +21,16 @@ class FakeSessionAgent:
         self.context_tokens_estimated = False
         self.closed = False
         self.loaded = []
+        self.due = [{
+            "id": "cron-1",
+            "prompt": "eat",
+            "interval_minutes": 1,
+        }]
+        self.cron_tasks = [{
+            "id": "cron-2",
+            "prompt": "sleep",
+            "interval_minutes": 30,
+        }]
 
     def list_conversations(self):
         return []
@@ -68,6 +78,19 @@ class FakeSessionAgent:
     def task_recovery(self, task_id=None):
         return None
 
+    def cron_due(self):
+        due = self.due
+        self.due = []
+        return due
+
+    def cron_status(self):
+        return {"enabled": True, "tasks": list(self.cron_tasks)}
+
+    def cron_remove(self, task_id):
+        before = len(self.cron_tasks)
+        self.cron_tasks = [task for task in self.cron_tasks if task["id"] != task_id]
+        return {"ok": len(self.cron_tasks) < before}
+
     def close(self):
         self.closed = True
 
@@ -106,6 +129,41 @@ class ServerSessionCommandTests(unittest.TestCase):
         self.assertEqual(events[0]["type"], "session_loaded")
         self.assertTrue(events[0]["success"])
         self.assertEqual(agent.loaded, ["s1"])
+
+    def test_cron_due_returns_and_clears_due_tasks(self):
+        agent = FakeSessionAgent()
+
+        events = run_commands(agent, [
+            {"cmd": "cron_due"},
+            {"cmd": "cron_due"},
+        ])
+
+        self.assertEqual(events[0]["type"], "cron_due")
+        self.assertIn("eat", events[0]["text"])
+        self.assertEqual(events[0]["tasks"][0]["id"], "cron-1")
+        self.assertEqual(events[1]["tasks"], [])
+        self.assertEqual(events[1]["text"], "")
+
+    def test_cron_remove_options_returns_tasks(self):
+        agent = FakeSessionAgent()
+
+        events = run_commands(agent, [{"cmd": "cron_remove_options"}])
+
+        self.assertEqual(events[0]["type"], "cron_remove_options")
+        self.assertEqual(events[0]["tasks"][0]["id"], "cron-2")
+
+    def test_confirmed_cron_remove_deletes_without_extra_prompt(self):
+        agent = FakeSessionAgent()
+
+        events = run_commands(agent, [{
+            "cmd": "cron_remove",
+            "id": "cron-2",
+            "confirmed": True,
+        }])
+
+        self.assertEqual(events[0]["type"], "cron")
+        self.assertTrue(events[0]["success"])
+        self.assertEqual(agent.cron_tasks, [])
 
 
 if __name__ == "__main__":

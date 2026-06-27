@@ -68,6 +68,7 @@ def main():
         session_config=config.get("sessions", {}),
         background_config=config.get("background_jobs", {}),
         context_config=config.get("context", {}),
+        cron_config=config.get("cron", {}),
         workspace=os.getcwd(),
         sierra_dir=SIERRA_DIR,
     )
@@ -142,150 +143,166 @@ def _handle_command(cmd, agent):
         _auto_save(agent)
         agent.close()
         exit(0)
-    elif cmd == "/help":
+    if cmd == "/help":
         print("""
-/quit       退出
-/help       帮助
-/new        新对话
-/list       对话列表
-/load <n>   加载第 n 个对话
-/sessions   历史会话库
-/session-search <关键词> 搜索历史会话
-/session-load <id> 加载历史会话
-/reset      清空
-/compress   压缩上下文
-/task       查看当前任务计划
-/task-cancel 放弃当前任务
-/debug-context 查看上一轮模型上下文摘要
-/jobs      查看后台维护队列
-/skills     查看技能索引与就绪状态
-/skills-reload 重新扫描技能包
-/skills-stats 查看技能使用统计
-/memory     查看记忆
-/audit      查看最近工具审计""")
-    elif cmd == "/new":
+/quit, /exit          exit
+/help                 show commands
+/new, /reset          start a new conversation
+/list                 list saved conversations
+/load <n|id>          load a saved conversation
+/sessions             list SQLite sessions
+/session-search <q>   search session history
+/session-load <id>    load a SQLite session
+/undo [n]             undo recent user turns
+/retry                retry the previous user turn
+/compress             compress conversation history
+/task                 show current task plan
+/task-cancel          abandon current task
+/debug-context        show last TurnContext summary
+/jobs                 show background jobs
+/cron                 list scheduled reminders
+/cron-add <min> <p>   add scheduled reminder
+/cron-remove <id>     remove scheduled reminder
+/skills               list skills
+/skills-reload        reload skills
+/skills-stats         show skill stats
+/memory               show curated memory
+/audit                show recent tool audit
+""")
+        return
+    if cmd in ("/new", "/reset"):
         _auto_save(agent)
         agent.reset()
         agent.conv_id = None
-        print("✅ 已开始新对话")
-    elif cmd == "/list":
+        print("started a new conversation")
+        return
+    if cmd == "/list":
+        for index, conv in enumerate(agent.list_conversations(), 1):
+            print(f"[{index}] {conv['title'][:60]}  {conv['id']}")
+        return
+    if cmd.startswith("/load "):
+        arg = cmd.split(" ", 1)[1].strip()
         convs = agent.list_conversations()
-        print("📋 对话列表:")
-        for i, c in enumerate(convs, 1):
-            print(f"  [{i}] {c['title'][:40]}")
-    elif cmd.startswith("/load "):
-        arg = cmd.split(" ", 1)[1]
-        convs = agent.list_conversations()
+        conv_id = arg
         if arg.isdigit():
             idx = int(arg) - 1
             if 0 <= idx < len(convs):
-                _auto_save(agent)
-                agent.load_conversation(convs[idx]["id"])
-                print(f"✅ 已加载: {convs[idx]['title'][:40]}")
-        else:
-            _auto_save(agent)
-            agent.load_conversation(arg)
-            print(f"✅ 已加载: {arg}")
-    elif cmd == "/sessions":
-        sessions = agent.list_sessions(limit=20)
-        if not sessions:
-            print("暂无历史会话")
-        for i, session in enumerate(sessions, 1):
-            print(
-                f"  [{i}] {session.get('id', '')} · "
-                f"{session.get('message_count', 0)} messages · "
-                f"{session.get('title') or '(untitled)'}"
-            )
-    elif cmd.startswith("/session-search "):
-        query = cmd.split(" ", 1)[1].strip()
-        results = agent.search_sessions(query, limit=10)
-        if not results:
-            print("没有找到相关历史会话")
-        for result in results:
+                conv_id = convs[idx]["id"]
+        _auto_save(agent)
+        agent.load_conversation(conv_id)
+        print(f"loaded {conv_id}")
+        return
+    if cmd == "/sessions":
+        for session in agent.list_sessions(limit=20):
+            print(f"{session.get('id')} · {session.get('message_count', 0)} messages · {session.get('title') or '(untitled)'}")
+        return
+    if cmd.startswith("/session-search "):
+        for result in agent.search_sessions(cmd.split(" ", 1)[1].strip(), limit=10):
             snippet = " ".join(str(result.get("snippet") or result.get("content") or "").split())
-            if len(snippet) > 220:
-                snippet = snippet[:220] + "..."
-            print(
-                f"{result.get('session_id', '')} · {result.get('role', '?')}\n"
-                f"  {result.get('title') or '(untitled)'}\n"
-                f"  {snippet}"
-            )
-    elif cmd.startswith("/session-load "):
-        session_id = cmd.split(" ", 1)[1].strip()
+            print(f"{result.get('session_id')} · {result.get('role')}\n  {snippet[:220]}")
+        return
+    if cmd.startswith("/session-load "):
         _auto_save(agent)
-        result = agent.load_session(session_id)
-        if result.get("ok"):
-            print(f"✅ 已加载历史会话: {session_id}")
-        else:
-            print(f"❌ {result.get('error', '加载历史会话失败')}")
-    elif cmd == "/reset":
-        agent.reset()
-        agent.conv_id = None
-        print("✅ 已清空当前对话")
-    elif cmd == "/compress":
-        old = len(agent.messages)
+        result = agent.load_session(cmd.split(" ", 1)[1].strip())
+        print("loaded" if result.get("ok") else result.get("error", "load failed"))
+        return
+    if cmd.startswith("/undo"):
+        parts = cmd.split()
+        count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        result = agent.undo_last_turn(count)
+        print(
+            f"undid {result.get('removed_user_turns', count)} turn(s)"
+            if result.get("ok") else result.get("error", "nothing to undo")
+        )
+        return
+    if cmd == "/retry":
+        result = agent.retry_last_turn()
+        if not result.get("ok"):
+            print(result.get("error", "nothing to retry"))
+            return
+        print("retrying previous turn...")
+        agent.chat(
+            result.get("user_message", ""),
+            on_tool_approval=_confirm_tool_call,
+            on_user_input=_request_user_input,
+        )
+        _auto_save(agent)
+        return
+    if cmd == "/compress":
         result = agent.compress_messages(force=True)
-        if result.get("compressed"):
-            print(
-                f"🔧 压缩完成: {old} → {len(agent.messages)} 条，"
-                f"约 {result['before_tokens']} → {result['after_tokens']} tokens"
-            )
-        else:
-            print("ℹ️ 当前没有可安全压缩的完整历史轮次，消息未改变。")
+        print("compressed" if result.get("compressed") else result.get("reason", "unchanged"))
         _auto_save(agent)
-    elif cmd == "/task":
+        return
+    if cmd == "/task":
         task = agent.task_status()
         if not task:
-            print("当前没有任务计划")
+            print("no active task")
         else:
-            print(f"📌 {task.get('objective', '')} [{task.get('status', '')}]")
+            print(f"{task.get('objective', '')} [{task.get('status', '')}]")
             for step in task.get("steps", []):
-                icon = {
-                    "completed": "✓",
-                    "in_progress": "›",
-                    "pending": "·",
-                }.get(step.get("status"), "?")
-                print(f"  {icon} {step.get('step', '')}")
-    elif cmd == "/task-cancel":
+                print(f"- {step.get('status')}: {step.get('step')}")
+        return
+    if cmd == "/task-cancel":
         task = agent.task_status()
-        if not task or task.get("status") not in ("active", "interrupted"):
-            print("当前没有可放弃的任务")
-        else:
+        if task and task.get("status") in ("active", "interrupted"):
             agent.abandon_task(task["id"])
-            print("已放弃当前任务")
-    elif cmd == "/debug-context":
-        print(agent.debug_context_status().get("text", "暂无 TurnContext。"))
-    elif cmd == "/jobs":
-        print(agent.background_jobs_status().get("text", "暂无后台任务。"))
-    elif cmd == "/skills":
+            print("task abandoned")
+        else:
+            print("no active task")
+        return
+    if cmd == "/debug-context":
+        print(agent.debug_context_status().get("text", "no TurnContext"))
+        return
+    if cmd == "/jobs":
+        print(agent.background_jobs_status().get("text", "no background jobs"))
+        return
+    if cmd == "/cron":
+        status = agent.cron_status()
+        tasks = status.get("tasks", [])
+        if not status.get("enabled"):
+            print("cron disabled")
+        elif not tasks:
+            print("no scheduled reminders")
+        else:
+            for task in tasks:
+                print(f"{task.get('id')} · every {task.get('interval_minutes')} min · {task.get('prompt')}")
+        return
+    if cmd.startswith("/cron-add "):
+        rest = cmd.split(" ", 1)[1].strip()
+        pieces = rest.split(" ", 1)
+        if len(pieces) != 2 or not pieces[0].isdigit():
+            print("usage: /cron-add <minutes> <prompt>")
+        else:
+            result = agent.cron_add(pieces[1], int(pieces[0]))
+            print("created" if result.get("ok") else result.get("error", "failed"))
+        return
+    if cmd.startswith("/cron-remove "):
+        result = agent.cron_remove(cmd.split(" ", 1)[1].strip())
+        print("removed" if result.get("ok") else "not found")
+        return
+    if cmd == "/skills":
         _print_skills(agent.skill_summaries(include_unavailable=True))
-    elif cmd == "/skills-reload":
+        return
+    if cmd == "/skills-reload":
         result = agent.reload_skills()
-        print(f"已重新加载 {result['count']} 个技能")
+        print(f"reloaded {result['count']} skills")
         _print_skills(result["skills"])
         for error in result["errors"]:
-            print(f"  ! {error}")
-    elif cmd == "/skills-stats":
+            print(f"! {error}")
+        return
+    if cmd == "/skills-stats":
         _print_skill_stats(agent.skill_usage_stats(limit=20))
-    elif cmd == "/memory":
+        return
+    if cmd == "/memory":
         text = memory_store.get_all_for_prompt()
-        print(f"📝 记忆:\n{text}" if text else "📝 暂无记忆")
-    elif cmd == "/audit":
-        records = agent.audit_recent(20)
-        if not records:
-            print("暂无工具审计记录")
-        for record in records:
+        print(text if text else "no memory")
+        return
+    if cmd == "/audit":
+        for record in agent.audit_recent(20):
             status = "ok" if record.get("success") else "blocked/failed"
-            print(
-                f"{record.get('timestamp', '')} "
-                f"{record.get('tool', '?')} "
-                f"[{record.get('decision', '?')}] {status} "
-                f"{record.get('duration_ms', 0)}ms"
-            )
-    else:
-        print(f"未知命令: {cmd}")
-
-
+            print(f"{record.get('timestamp', '')} {record.get('tool', '?')} [{record.get('decision', '?')}] {status}")
+        return
+    print(f"unknown command: {cmd}")
 def _print_skills(skills):
     current_category = None
     for skill in skills:

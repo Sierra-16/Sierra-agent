@@ -25,6 +25,104 @@ SKILL_EVENT_BY_TOOL = {
 }
 
 
+def summarize_tool_result(result, max_length=160):
+    """Build a compact, user-facing status summary for a tool result."""
+    success, error = _tool_result_status_from_value(result)
+    if error:
+        return {
+            "success": False,
+            "summary": sanitize_text(error, max_length=max_length),
+        }
+
+    value = _parse_tool_result(result)
+    summary = ""
+    if isinstance(value, dict):
+        summary = _pick_result_summary(value)
+    elif isinstance(value, list):
+        summary = f"{len(value)} item(s)"
+    elif value not in (None, ""):
+        summary = str(value)
+
+    summary = sanitize_text(summary or "done", max_length=max_length)
+    return {"success": success, "summary": summary}
+
+
+def _parse_tool_result(result):
+    if not isinstance(result, str):
+        return result
+    try:
+        return json.loads(result)
+    except (TypeError, json.JSONDecodeError):
+        return result
+
+
+def _tool_result_status_from_value(result):
+    value = _parse_tool_result(result)
+    if not isinstance(value, dict):
+        return True, ""
+    if value.get("error"):
+        return False, sanitize_text(str(value["error"]), max_length=300)
+    if value.get("ok") is False or value.get("success") is False:
+        detail = (
+            value.get("stderr")
+            or value.get("message")
+            or value.get("detail")
+            or value.get("reason")
+            or "tool returned failure status"
+        )
+        return False, sanitize_text(str(detail), max_length=300)
+
+    nested = value.get("result")
+    if isinstance(nested, dict) and nested.get("isError"):
+        return False, "MCP tool returned isError=true"
+    return True, ""
+
+
+def _pick_result_summary(value):
+    for key in ("message", "summary", "title", "path", "file_path", "url"):
+        item = value.get(key)
+        if item:
+            return str(item)
+
+    if "directories" in value or "files" in value:
+        directories = len(value.get("directories") or [])
+        files = len(value.get("files") or [])
+        return f"{directories} folder(s), {files} file(s)"
+
+    if "matches" in value and isinstance(value.get("matches"), list):
+        return f"{len(value['matches'])} match(es)"
+
+    for key in ("deleted", "saved", "count", "records"):
+        if key in value:
+            return f"{key}: {value.get(key)}"
+
+    stdout = value.get("stdout")
+    if stdout:
+        return _first_nonempty_line(str(stdout))
+
+    text = value.get("text") or value.get("content")
+    if text:
+        return _first_nonempty_line(str(text))
+
+    nested = value.get("result")
+    if isinstance(nested, dict):
+        nested_summary = _pick_result_summary(nested)
+        if nested_summary:
+            return nested_summary
+    elif nested not in (None, ""):
+        return str(nested)
+
+    return "done"
+
+
+def _first_nonempty_line(text):
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
 def run_conversation_loop(
     agent,
     user_message: str,
@@ -32,6 +130,7 @@ def run_conversation_loop(
     on_tool_approval=None,
     on_user_input=None,
 ):
+    turn_start_index = len(agent.messages)
     agent.messages.append({"role": "user", "content": user_message})
     checkpoint_conversation = getattr(agent, "checkpoint_conversation", None)
     if callable(checkpoint_conversation):
@@ -361,23 +460,7 @@ def run_conversation_loop(
             pass
 
     def _tool_result_status(result):
-        try:
-            value = json.loads(result) if isinstance(result, str) else result
-        except (TypeError, json.JSONDecodeError):
-            return True, ""
-
-        if not isinstance(value, dict):
-            return True, ""
-        if value.get("error"):
-            return False, sanitize_text(str(value["error"]), max_length=300)
-        if value.get("ok") is False or value.get("success") is False:
-            detail = value.get("stderr") or value.get("message") or "tool returned failure status"
-            return False, sanitize_text(str(detail), max_length=300)
-
-        nested = value.get("result")
-        if isinstance(nested, dict) and nested.get("isError"):
-            return False, "MCP tool returned isError=true"
-        return True, ""
+        return _tool_result_status_from_value(result)
 
     def _prepare_request_messages():
         return prepare_conversation_messages_for_request(
@@ -718,10 +801,12 @@ def run_conversation_loop(
             for tc in response["tool_calls"]:
                 tc_id, name, result = _exec_tool(tc)
                 if on_status:
+                    summary = summarize_tool_result(result)
                     on_status({
                         "type": "tool_result",
                         "name": name,
-                        "text": str(result)[:200],
+                        "text": summary["summary"],
+                        "success": summary["success"],
                     })
                 agent.messages.append({"role": "tool", "content": result, "tool_call_id": tc_id})
                 if callable(checkpoint_conversation):
@@ -738,6 +823,23 @@ def run_conversation_loop(
         agent.messages.append({"role": "assistant", "content": final_text})
         if callable(checkpoint_conversation):
             checkpoint_conversation()
+        skill_suggestion = getattr(agent, "skill_suggestion_for_turn", None)
+        if callable(skill_suggestion):
+            try:
+                suggestion = skill_suggestion(
+                    user_message,
+                    final_text,
+                    turn_start_index=turn_start_index,
+                )
+            except Exception:
+                suggestion = None
+            if suggestion and on_status:
+                on_status({
+                    "type": "skill_suggestion",
+                    "title": suggestion.get("title", ""),
+                    "reason": suggestion.get("reason", ""),
+                    "text": suggestion.get("text", ""),
+                })
         if _compact_if_needed(
             _estimate_persistent_history_tokens(),
             phase="post_turn",

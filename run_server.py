@@ -50,6 +50,7 @@ def make_agent(model_key):
         # companion_config=config.get("companion", {}),
         background_config=config.get("background_jobs", {}),
         context_config=config.get("context", {}),
+        cron_config=config.get("cron", {}),
         workspace=os.getcwd(),
         sierra_dir=sierra_dir,
         permission_config=config.get("permissions", {}),

@@ -18,6 +18,7 @@ import { ToolApprovalPrompt } from "./ToolApprovalPrompt.js";
 import { UserInputPrompt } from "./UserInputPrompt.js";
 import { TaskProgress } from "./TaskProgress.js";
 import { TaskRecoveryPrompt } from "./TaskRecoveryPrompt.js";
+import { CronRemovePicker } from "./CronRemovePicker.js";
 
 interface AppLayoutProps {
   app: MainApp;
@@ -116,6 +117,15 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
               models={app.modelPicker.models}
               selectedIndex={app.modelPicker.selectedIndex}
               loading={app.modelPicker.loading}
+              theme={theme}
+              cols={app.cols}
+            />
+          )}
+          {app.cronRemovePicker.open && (
+            <CronRemovePicker
+              tasks={app.cronRemovePicker.tasks}
+              selectedIndex={app.cronRemovePicker.selectedIndex}
+              loading={app.cronRemovePicker.loading}
               theme={theme}
               cols={app.cols}
             />

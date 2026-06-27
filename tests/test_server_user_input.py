@@ -87,7 +87,7 @@ class ServerUserInputTests(unittest.TestCase):
         self.assertEqual(events[1]["type"], "user_input_result")
         self.assertEqual(events[2]["type"], "done")
         self.assertEqual(events[2]["usage"]["context"], 321)
-        self.assertEqual(events[2]["usage"]["context_window"], 256000)
+        self.assertEqual(events[2]["usage"]["context_window"], agent.context_window)
         self.assertEqual(agent.answer["value"], "postgres")
         self.assertTrue(agent.closed)
 

@@ -20,9 +20,6 @@ from .config_validation import (
 from .safety import sanitize_arguments
 
 
-TUI_CONTEXT_WINDOW = 256_000
-
-
 def run_server(
     agent: Agent,
     config: dict | None = None,
@@ -52,6 +49,7 @@ def run_server(
                 "model": current_agent.llm.model,
                 "cwd": getattr(current_agent, "workspace", None) or os.getcwd(),
                 "recent": recent,
+                "cron_due": _agent_cron_due(current_agent),
                 "usage": _usage_payload(current_agent),
                 "task": _agent_task_status(current_agent),
                 "recovery_task": _agent_task_recovery(current_agent),
@@ -270,6 +268,50 @@ def run_server(
                 "task": None,
             }, ensure_ascii=False))
 
+        elif cmd == "undo":
+            try:
+                count = max(1, min(20, int(msg.get("count", 1) or 1)))
+            except (TypeError, ValueError):
+                count = 1
+            result = current_agent.undo_last_turn(count)
+            if result.get("ok"):
+                _auto_save(current_agent)
+            stdout(json.dumps({
+                "type": "history_changed",
+                "success": bool(result.get("ok")),
+                "text": (
+                    f"已撤回 {result.get('removed_user_turns', count)} 轮对话。"
+                    if result.get("ok")
+                    else result.get("error", "没有可撤回的对话。")
+                ),
+                "messages": _display_messages(current_agent),
+                "usage": _usage_payload(current_agent),
+                "task": _agent_task_status(current_agent),
+            }, ensure_ascii=False))
+
+        elif cmd == "retry":
+            result = current_agent.retry_last_turn()
+            if not result.get("ok"):
+                stdout(json.dumps({
+                    "type": "history_changed",
+                    "success": False,
+                    "text": result.get("error", "没有可重试的上一轮。"),
+                    "messages": _display_messages(current_agent),
+                    "usage": _usage_payload(current_agent),
+                    "task": _agent_task_status(current_agent),
+                }, ensure_ascii=False))
+                continue
+            _auto_save(current_agent)
+            stdout(json.dumps({
+                "type": "retry_ready",
+                "success": True,
+                "text": "已回退上一轮，正在重试。",
+                "query": result.get("user_message", ""),
+                "messages": _display_messages(current_agent),
+                "usage": _usage_payload(current_agent),
+                "task": _agent_task_status(current_agent),
+            }, ensure_ascii=False))
+
         elif cmd == "compress":
             old = len(current_agent.messages)
             result = current_agent.compress_messages(force=True)
@@ -314,6 +356,99 @@ def run_server(
                 "jobs": status.get("jobs", []),
                 "text": status.get("text", ""),
                 "enabled": bool(status.get("enabled")),
+            }, ensure_ascii=False))
+
+        elif cmd == "cron":
+            status = current_agent.cron_status()
+            stdout(json.dumps({
+                "type": "cron",
+                "text": _format_cron_status(status),
+                "tasks": status.get("tasks", []),
+                "enabled": bool(status.get("enabled")),
+            }, ensure_ascii=False))
+
+        elif cmd == "cron_due":
+            due = _agent_cron_due(current_agent)
+            stdout(json.dumps({
+                "type": "cron_due",
+                "tasks": due,
+                "text": _format_cron_due(due),
+            }, ensure_ascii=False))
+
+        elif cmd == "cron_remove_options":
+            status = current_agent.cron_status()
+            stdout(json.dumps({
+                "type": "cron_remove_options",
+                "tasks": status.get("tasks", []),
+                "enabled": bool(status.get("enabled")),
+            }, ensure_ascii=False))
+
+        elif cmd == "cron_add":
+            prompt = str(msg.get("prompt") or "").strip()
+            try:
+                interval_minutes = max(1, int(msg.get("interval_minutes", 60) or 60))
+            except (TypeError, ValueError):
+                interval_minutes = 60
+            approval = _request_command_approval(
+                current_agent,
+                "cron_add",
+                {"prompt": prompt, "interval_minutes": interval_minutes},
+                "创建本地定时提示",
+            )
+            if not approval["approved"]:
+                stdout(json.dumps({
+                    "type": "cron",
+                    "success": False,
+                    "text": "已取消创建定时提示。",
+                }, ensure_ascii=False))
+                continue
+            result = current_agent.cron_add(prompt, interval_minutes)
+            stdout(json.dumps({
+                "type": "cron",
+                "success": bool(result.get("ok")),
+                "text": (
+                    f"已创建定时提示 {result.get('task', {}).get('id', '')}。"
+                    if result.get("ok")
+                    else result.get("error", "创建失败")
+                ),
+                "tasks": current_agent.cron_status().get("tasks", []),
+                "enabled": True,
+            }, ensure_ascii=False))
+
+        elif cmd == "cron_remove":
+            task_id = str(msg.get("id") or "").strip()
+            if not task_id:
+                stdout(json.dumps({
+                    "type": "cron",
+                    "success": False,
+                    "text": "请选择要删除的定时提示。",
+                    "tasks": current_agent.cron_status().get("tasks", []),
+                    "enabled": True,
+                }, ensure_ascii=False))
+                continue
+            if msg.get("confirmed") is True:
+                approval = {"approved": True}
+            else:
+                approval = _request_command_approval(
+                    current_agent,
+                    "cron_remove",
+                    {"id": task_id},
+                    "删除本地定时提示",
+                )
+            if not approval["approved"]:
+                stdout(json.dumps({
+                    "type": "cron",
+                    "success": False,
+                    "text": "已取消删除定时提示。",
+                }, ensure_ascii=False))
+                continue
+            result = current_agent.cron_remove(task_id)
+            stdout(json.dumps({
+                "type": "cron",
+                "success": bool(result.get("ok")),
+                "text": "已删除定时提示。" if result.get("ok") else "未找到该定时提示。",
+                "tasks": current_agent.cron_status().get("tasks", []),
+                "enabled": True,
             }, ensure_ascii=False))
 
         elif cmd == "memory_search":
@@ -637,7 +772,7 @@ def _usage_payload(agent: Agent) -> dict:
         "context_estimated",
         getattr(agent, "context_tokens_estimated", False),
     )
-    usage["context_window"] = TUI_CONTEXT_WINDOW
+    usage["context_window"] = int(getattr(agent, "context_window", 0) or 0)
     return usage
 
 
@@ -649,6 +784,29 @@ def _agent_task_status(agent: Agent) -> dict | None:
 def _agent_task_recovery(agent: Agent, task_id: str | None = None) -> dict | None:
     task_recovery = getattr(agent, "task_recovery", None)
     return task_recovery(task_id) if callable(task_recovery) else None
+
+
+def _agent_cron_due(agent: Agent) -> list[dict]:
+    cron_due = getattr(agent, "cron_due", None)
+    if not callable(cron_due):
+        return []
+    try:
+        return cron_due()
+    except Exception:
+        return []
+
+
+def _display_messages(agent: Agent) -> list[dict[str, str]]:
+    messages = []
+    for message in getattr(agent, "messages", []):
+        role = message.get("role")
+        if role not in ("user", "assistant", "system", "error"):
+            continue
+        content = message.get("content")
+        if not content:
+            continue
+        messages.append({"role": role, "text": str(content)})
+    return messages
 
 
 def _format_memory_status(status: dict) -> str:
@@ -674,6 +832,31 @@ def _format_memory_status(status: dict) -> str:
             )
         else:
             lines.append(f"- {name}: ready")
+    return "\n".join(lines)
+
+
+def _format_cron_status(status: dict) -> str:
+    if not status.get("enabled"):
+        return "Cron 未启用。"
+    tasks = status.get("tasks", [])
+    if not tasks:
+        return "暂无定时提示。用 /cron-add <分钟> <提示> 创建。"
+    lines = [f"定时提示 · {len(tasks)} 个"]
+    for task in tasks:
+        next_run = _format_timestamp(task.get("next_run_at"))
+        lines.append(
+            f"- {task.get('id', '')} · every {task.get('interval_minutes', '?')} min · "
+            f"next {next_run}\n  {task.get('prompt', '')}"
+        )
+    return "\n".join(lines)
+
+
+def _format_cron_due(tasks: list[dict]) -> str:
+    if not tasks:
+        return ""
+    lines = ["定时提示到期:"]
+    for task in tasks:
+        lines.append(f"- {task.get('prompt', '')}")
     return "\n".join(lines)
 
 

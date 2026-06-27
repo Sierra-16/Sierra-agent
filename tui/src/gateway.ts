@@ -43,6 +43,15 @@ export interface SkillSummary {
   missing_required_environment_variables?: string[];
 }
 
+export interface CronTaskOption {
+  id: string;
+  prompt: string;
+  interval_minutes: number;
+  enabled?: boolean;
+  next_run_at?: number | null;
+  last_run_at?: number | null;
+}
+
 export interface ServerEvent {
   type: string;
   text?: string;
@@ -70,6 +79,7 @@ export interface ServerEvent {
   summary?: Record<string, unknown>;
   key?: string;
   title?: string;
+  query?: string;
   model?: string;
   cwd?: string;
   recent?: { id: string; title: string } | null;
@@ -105,6 +115,8 @@ export interface ServerEvent {
   action?: "resume" | "abandon";
   task?: TaskPlan | null;
   recovery_task?: TaskPlan | null;
+  cron_due?: CronTaskOption[];
+  tasks?: CronTaskOption[];
   status?: {
     servers?: {
       name: string;

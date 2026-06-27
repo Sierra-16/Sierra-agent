@@ -5,7 +5,7 @@
  */
 import { useInput } from "ink";
 import type { Key } from "ink";
-import { type MutableRefObject, useRef } from "react";
+import { useRef } from "react";
 import type { Gateway } from "../gateway.js";
 import type { TaskPlan } from "../gateway.js";
 import type { ComposerActions, ComposerRefs, ComposerState } from "./useComposerState.js";
@@ -30,6 +30,10 @@ interface UseInputHandlersOptions {
   closeModelPicker: () => void;
   moveModelSelection: (delta: number) => void;
   confirmModelSelection: () => void;
+  cronRemovePickerOpen: boolean;
+  closeCronRemovePicker: () => void;
+  moveCronRemoveSelection: (delta: number) => void;
+  confirmCronRemoveSelection: () => void;
   pendingToolApproval: ToolApprovalRequest | null;
   confirmToolApproval: (decision: ToolApprovalDecision) => void;
   pendingUserInput: UserInputRequest | null;
@@ -53,6 +57,10 @@ export function useInputHandlers(opts: UseInputHandlersOptions) {
     closeModelPicker,
     moveModelSelection,
     confirmModelSelection,
+    cronRemovePickerOpen,
+    closeCronRemovePicker,
+    moveCronRemoveSelection,
+    confirmCronRemoveSelection,
     pendingToolApproval,
     confirmToolApproval,
     pendingUserInput,
@@ -133,6 +141,25 @@ export function useInputHandlers(opts: UseInputHandlersOptions) {
       }
       if (key.escape) {
         closeModelPicker();
+        return;
+      }
+    }
+
+    if (cronRemovePickerOpen) {
+      if (key.downArrow) {
+        moveCronRemoveSelection(1);
+        return;
+      }
+      if (key.upArrow) {
+        moveCronRemoveSelection(-1);
+        return;
+      }
+      if (key.return) {
+        confirmCronRemoveSelection();
+        return;
+      }
+      if (key.escape) {
+        closeCronRemovePicker();
         return;
       }
     }

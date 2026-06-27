@@ -32,6 +32,9 @@ from .context_compaction import (
     select_compaction_window,
     strip_historical_media,
 )
+from .context_files import ContextFileLoader
+from .cron import CronStore
+from .skill_suggestions import suggest_skill_from_turn
 from .tasks import TaskCheckpointStore, TaskManager
 from .token_utils import estimate_tokens
 
@@ -62,13 +65,16 @@ def _resolve_prompt_budget(
     return max(4096, min(model_prompt_budget, cap))
 
 
-def _resolve_compression_window(model_context_window, context_config):
+def _resolve_compression_window(model_context_window, context_config, prompt_context_window=None):
     model_window = max(1, int(model_context_window or 1))
     raw_window = context_config.get(
         "compression_context_window",
         context_config.get("compression_window_tokens", "model"),
     )
-    if str(raw_window).strip().lower() in {"", "0", "none", "model", "false"}:
+    normalized = str(raw_window).strip().lower()
+    if normalized in {"prompt", "budget", "context", "context_budget", "max_prompt_tokens"}:
+        return max(1, int(prompt_context_window or model_window))
+    if normalized in {"", "0", "none", "model", "false"}:
         return model_window
     try:
         return max(1, int(raw_window))
@@ -102,6 +108,7 @@ class Agent:
         session_config=None,
         background_config=None,
         context_config=None,
+        cron_config=None,
         workspace=None,
         sierra_dir=None,
     ):
@@ -198,6 +205,9 @@ class Agent:
             self.tools.unregister("resolve_task_execution")
         self._turns_since_memory_review = 0
         context_config = context_config if isinstance(context_config, dict) else {}
+        self.context_files = ContextFileLoader.from_config(context_config)
+        self.last_context_files = None
+        self.cron = CronStore.from_config(cron_config, base_dir=self.sierra_dir)
         self.model_context_window = max(1, int(context_window))
         self.context_window = _resolve_prompt_budget(
             self.model_context_window,
@@ -207,6 +217,7 @@ class Agent:
         self.compression_context_window = _resolve_compression_window(
             self.model_context_window,
             context_config,
+            prompt_context_window=self.context_window,
         )
         self.compression_enabled = context_config.get("enabled", True) is not False
         compression_threshold_ratio = _coerce_ratio(
@@ -340,6 +351,42 @@ class Agent:
             },
             handler=self._skill_usage_stats_tool,
         )
+        self.tools.register(
+            name="cron_list",
+            description="List Sierra cron reminders and scheduled prompts.",
+            parameters={"type": "object", "properties": {}},
+            handler=self._cron_list_tool,
+        )
+        self.tools.register(
+            name="cron_add",
+            description=(
+                "Create a recurring Sierra reminder. This stores a local schedule; "
+                "it does not run unattended unless Sierra is running."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Reminder or task prompt"},
+                    "interval_minutes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Interval in minutes",
+                    },
+                },
+                "required": ["prompt", "interval_minutes"],
+            },
+            handler=self._cron_add_tool,
+        )
+        self.tools.register(
+            name="cron_remove",
+            description="Remove a Sierra cron reminder by id.",
+            parameters={
+                "type": "object",
+                "properties": {"id": {"type": "string", "description": "Cron task id"}},
+                "required": ["id"],
+            },
+            handler=self._cron_remove_tool,
+        )
         self.system_prompt = self._build_system_prompt()
         self.messages = []
         self.max_iterations = 15
@@ -403,6 +450,13 @@ class Agent:
 
     def _build_system_prompt(self):
         memory_text = self.memory_manager.get_prompt_context()
+        context_file_text = ""
+        try:
+            self.last_context_files = self.context_files.load(self.workspace)
+            context_file_text = self.last_context_files.text
+        except Exception as exc:
+            logger.warning("Context files disabled for this prompt: %s", exc)
+            self.last_context_files = None
         extra_parts = [
             f"Current model: {self.model}",
             (
@@ -414,6 +468,8 @@ class Agent:
                 "- File and shell tools resolve relative paths under workspace unless a user explicitly gives an absolute path."
             ),
         ]
+        if context_file_text:
+            extra_parts.append(context_file_text)
         if memory_text:
             extra_parts.append(memory_text)
         skills_prompt = self.skill_index.build(
@@ -490,6 +546,105 @@ class Agent:
 
     def _skill_usage_stats_tool(self, limit=20):
         return json.dumps(self.skill_usage_stats(limit=limit), ensure_ascii=False)
+
+    def cron_status(self):
+        if self.cron is None:
+            return {"enabled": False, "tasks": []}
+        return {"enabled": True, "tasks": self.cron.list()}
+
+    def cron_add(self, prompt, interval_minutes):
+        if self.cron is None:
+            return {"ok": False, "error": "cron is disabled"}
+        if not str(prompt or "").strip():
+            return {"ok": False, "error": "prompt is required"}
+        return {"ok": True, "task": self.cron.add(prompt, interval_minutes)}
+
+    def cron_remove(self, task_id):
+        if self.cron is None:
+            return {"ok": False, "error": "cron is disabled"}
+        removed = self.cron.remove(task_id)
+        return {"ok": removed, "removed": removed}
+
+    def cron_due(self):
+        if self.cron is None:
+            return []
+        return self.cron.due()
+
+    def _cron_list_tool(self):
+        return json.dumps(self.cron_status(), ensure_ascii=False)
+
+    def _cron_add_tool(self, prompt, interval_minutes):
+        return json.dumps(
+            self.cron_add(prompt, interval_minutes),
+            ensure_ascii=False,
+        )
+
+    def _cron_remove_tool(self, id):
+        return json.dumps(self.cron_remove(id), ensure_ascii=False)
+
+    def undo_last_turn(self, count=1):
+        count = max(1, int(count or 1))
+        if not self.messages:
+            return {"ok": False, "error": "no messages to undo", "messages": []}
+
+        start = self._find_user_turn_start(count)
+        if start is None:
+            return {"ok": False, "error": "no user turn to undo", "messages": self.messages}
+
+        removed = self.messages[start:]
+        self.messages = self.messages[:start]
+        self.sync_memory_review_state()
+        self.refresh_context_estimate()
+        self.refresh_system_prompt()
+        self.checkpoint_conversation()
+        return {
+            "ok": True,
+            "removed_messages": len(removed),
+            "removed_user_turns": sum(1 for message in removed if message.get("role") == "user"),
+            "messages": self.messages,
+        }
+
+    def retry_last_turn(self):
+        start = self._find_user_turn_start(1)
+        if start is None:
+            return {"ok": False, "error": "no user turn to retry", "messages": self.messages}
+        user_message = str(self.messages[start].get("content") or "")
+        removed = self.messages[start:]
+        self.messages = self.messages[:start]
+        self.sync_memory_review_state()
+        self.refresh_context_estimate()
+        self.refresh_system_prompt()
+        self.checkpoint_conversation()
+        return {
+            "ok": True,
+            "user_message": user_message,
+            "removed_messages": len(removed),
+            "messages": self.messages,
+        }
+
+    def _find_user_turn_start(self, count=1):
+        remaining = max(1, int(count or 1))
+        for index in range(len(self.messages) - 1, -1, -1):
+            if self.messages[index].get("role") == "user":
+                remaining -= 1
+                if remaining == 0:
+                    return index
+        return None
+
+    def skill_suggestion_for_turn(self, user_message, assistant_message, turn_start_index=0):
+        turn_messages = self.messages[max(0, int(turn_start_index or 0)) :]
+        suggestion = suggest_skill_from_turn(user_message, assistant_message, turn_messages)
+        if suggestion is None:
+            return None
+        signature = suggestion.title.lower()
+        if getattr(self, "_last_skill_suggestion_signature", "") == signature:
+            return None
+        self._last_skill_suggestion_signature = signature
+        return {
+            "title": suggestion.title,
+            "reason": suggestion.reason,
+            "text": suggestion.to_text(),
+        }
 
     def schedule_post_turn_maintenance(
         self,
@@ -1200,6 +1355,9 @@ class Agent:
             self.tools.unregister("skill_reload")
             self.tools.unregister("skill_manage")
             self.tools.unregister("skill_usage_stats")
+            self.tools.unregister("cron_list")
+            self.tools.unregister("cron_add")
+            self.tools.unregister("cron_remove")
             self.memory_manager.close()
             self.skill_usage.close()
             self.mcp.close_all()
