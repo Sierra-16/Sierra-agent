@@ -5,6 +5,14 @@ from .context_budget import (
     fit_messages_to_budget,
     prepare_conversation_messages_for_request,
 )
+from .context_errors import (
+    CONTEXT_OVERFLOW,
+    OUTPUT_LIMIT,
+    PAYLOAD_TOO_LARGE,
+    classify_llm_error,
+    extract_available_output_tokens,
+    extract_context_window,
+)
 from .safety import sanitize_arguments, sanitize_text
 from .token_utils import estimate_tokens
 from .turn_context import build_memory_context, build_turn_context
@@ -391,77 +399,67 @@ def run_conversation_loop(
             ),
         )
 
-    on_delta.state = {"in_reasoning": False}
-    compaction_attempts = 0
-
-    for _ in range(agent.max_iterations):
-        tools = agent.tools.get_definitions()
-        task_context = ""
-        if task_manager is not None:
+    def _call_compress_messages(*, force=False, keep_tokens=None):
+        compress_messages = getattr(agent, "compress_messages", None)
+        if not callable(compress_messages):
+            return {"compressed": False, "reason": "compression_unavailable"}
+        try:
+            return compress_messages(force=force, keep_tokens=keep_tokens)
+        except TypeError as exc:
+            message = str(exc)
+            if "unexpected keyword" not in message and "positional argument" not in message:
+                raise
             try:
-                task_context = task_manager.prompt_context()
-            except Exception:
-                task_context = ""
-        turn_context.system_prompt = getattr(agent, "system_prompt", "")
-        turn_context.task_context = task_context
-        request_messages, request_prepare_stats = _prepare_request_messages()
-        preflight_messages = turn_context.build_messages(request_messages)
-        preflight_tokens = estimate_tokens(preflight_messages, tools=tools)
-        while (
-            getattr(agent, "compression_enabled", True)
-            and preflight_tokens > agent.max_compress_tokens
-            and compaction_attempts < getattr(agent, "compression_max_passes", 1)
-        ):
-            compaction_attempts += 1
-            before_compaction_tokens = preflight_tokens
+                if keep_tokens is None:
+                    return compress_messages()
+                return compress_messages(keep_tokens=keep_tokens)
+            except TypeError as inner_exc:
+                inner_message = str(inner_exc)
+                if (
+                    "unexpected keyword" not in inner_message
+                    and "positional argument" not in inner_message
+                ):
+                    raise
+                return compress_messages()
+
+    def _compact_if_needed(current_tokens, *, phase, recompute_tokens):
+        if not getattr(agent, "compression_enabled", True):
+            return False
+
+        max_tokens = int(getattr(agent, "max_compress_tokens", 0) or 0)
+        if max_tokens <= 0 or current_tokens <= max_tokens:
+            return False
+
+        attempts = 0
+        max_attempts = int(getattr(agent, "compression_max_passes", 1) or 1)
+        compacted = False
+        while current_tokens > max_tokens and attempts < max_attempts:
+            attempts += 1
+            before_compaction_tokens = current_tokens
             if on_status:
                 on_status({
                     "type": "context_compaction_start",
+                    "phase": phase,
                     "before_tokens": before_compaction_tokens,
                 })
             else:
                 print("\n⚠️ 上下文过长，正在压缩...")
 
-            message_tokens = estimate_tokens(agent.messages)
-            fixed_tokens = max(0, preflight_tokens - message_tokens)
-            target_tokens = getattr(
-                agent,
-                "compression_target_tokens",
-                getattr(agent, "compression_keep_tokens", preflight_tokens // 2),
-            )
-            configured_keep_tokens = getattr(
-                agent,
-                "compression_keep_tokens",
-                target_tokens,
-            )
             keep_tokens = max(
                 1,
-                min(configured_keep_tokens, target_tokens - fixed_tokens),
+                min(
+                    getattr(agent, "compression_keep_tokens", max_tokens),
+                    getattr(agent, "compression_target_tokens", max_tokens),
+                ),
             )
-            compaction_result = agent.compress_messages(keep_tokens=keep_tokens)
+            compaction_result = _call_compress_messages(
+                force=False,
+                keep_tokens=keep_tokens,
+            )
             if not isinstance(compaction_result, dict):
                 compaction_result = {"compressed": False, "reason": "unknown"}
 
-            if compaction_result.get("compressed"):
-                request_messages, request_prepare_stats = _prepare_request_messages()
-                compacted_preflight = turn_context.build_messages(request_messages)
-                after_tokens = estimate_tokens(compacted_preflight, tools=tools)
-                preflight_tokens = after_tokens
-                if on_status:
-                    on_status({
-                        "type": "context_compaction_done",
-                        "before_tokens": before_compaction_tokens,
-                        "after_tokens": after_tokens,
-                        "summarized_messages": compaction_result.get(
-                            "summarized_messages", 0
-                        ),
-                        "kept_messages": compaction_result.get("kept_messages", 0),
-                    })
-                else:
-                    print(
-                        f"✅ 压缩完成：{preflight_tokens} → {after_tokens} tokens。"
-                    )
-            else:
+            if not compaction_result.get("compressed"):
                 event_type = (
                     "context_compaction_failed"
                     if compaction_result.get("reason") == "summary_failed"
@@ -470,16 +468,55 @@ def run_conversation_loop(
                 if on_status:
                     on_status({
                         "type": event_type,
+                        "phase": phase,
                         "before_tokens": before_compaction_tokens,
                     })
                 else:
                     print("ℹ️ 当前没有可安全压缩的完整历史轮次。")
-
                 break
 
+            compacted = True
+            try:
+                current_tokens = int(recompute_tokens() or 0)
+            except Exception:
+                current_tokens = estimate_tokens(agent.messages)
+            if on_status:
+                on_status({
+                    "type": "context_compaction_done",
+                    "phase": phase,
+                    "before_tokens": before_compaction_tokens,
+                    "after_tokens": current_tokens,
+                    "summarized_messages": compaction_result.get(
+                        "summarized_messages", 0
+                    ),
+                    "kept_messages": compaction_result.get("kept_messages", 0),
+                })
+            else:
+                print(
+                    f"✅ 压缩完成：{before_compaction_tokens} → {current_tokens} tokens。"
+                )
+        return compacted
+
+    def _estimate_persistent_history_tokens():
+        return estimate_tokens(agent.messages)
+
+    def _prepare_api_messages(tools):
         request_messages, request_prepare_stats = _prepare_request_messages()
         api_messages = turn_context.build_messages(request_messages)
         estimated_context_tokens = estimate_tokens(api_messages, tools=tools)
+        if _compact_if_needed(
+            estimated_context_tokens,
+            phase="preflight",
+            recompute_tokens=lambda: estimate_tokens(
+                turn_context.build_messages(_prepare_request_messages()[0]),
+                tools=tools,
+            ),
+        ):
+            if callable(checkpoint_conversation):
+                checkpoint_conversation()
+            request_messages, request_prepare_stats = _prepare_request_messages()
+            api_messages = turn_context.build_messages(request_messages)
+            estimated_context_tokens = estimate_tokens(api_messages, tools=tools)
         context_budget = int(getattr(agent, "context_window", 0) or 0)
         if context_budget > 0 and estimated_context_tokens > context_budget:
             api_messages, omitted_messages = fit_messages_to_budget(
@@ -503,8 +540,163 @@ def run_conversation_loop(
                 "count": request_prepare_stats.get("truncated_tool_results", 0),
                 "omitted_chars": request_prepare_stats.get("omitted_tool_result_chars", 0),
             })
+        return api_messages, estimated_context_tokens
+
+    def _update_context_window_from_error(error):
+        detected_window = extract_context_window(error)
+        if not detected_window:
+            return False
+        current_window = int(getattr(agent, "model_context_window", 0) or 0)
+        if current_window and detected_window >= current_window:
+            return False
+        update_context_window = getattr(agent, "update_context_window", None)
+        if callable(update_context_window):
+            try:
+                update_context_window(detected_window)
+            except Exception:
+                return False
+        else:
+            agent.model_context_window = detected_window
+            agent.compression_context_window = detected_window
+        if on_status:
+            on_status({
+                "type": "context_window_updated",
+                "context_window": detected_window,
+            })
+        return True
+
+    def _reduce_output_tokens_from_error(error, estimated_context_tokens):
+        current_max = int(getattr(agent.llm, "max_tokens", 0) or 0)
+        if current_max <= 0:
+            return False
+
+        available = extract_available_output_tokens(error)
+        if not available:
+            model_window = int(
+                getattr(
+                    agent,
+                    "model_context_window",
+                    getattr(agent, "compression_context_window", 0),
+                )
+                or 0
+            )
+            if model_window > 0:
+                available = model_window - int(estimated_context_tokens or 0) - 128
+        if not available or available <= 128:
+            return False
+
+        new_max = min(current_max - 1, max(128, int(available) - 64))
+        if new_max <= 0 or new_max >= current_max:
+            return False
+        agent.llm.max_tokens = new_max
+        if on_status:
+            on_status({
+                "type": "context_output_tokens_reduced",
+                "from": current_max,
+                "to": new_max,
+            })
+        return True
+
+    def _context_recovery_failed_response(error, category):
+        if category == OUTPUT_LIMIT:
+            content = (
+                "模型可用输出空间不足，我已经尝试降低本次输出长度，但仍然无法继续。"
+                "请先压缩会话或开启新会话后再试。"
+            )
+        else:
+            content = (
+                "当前会话已经超过模型上下文窗口，我尝试压缩后仍然放不下。"
+                "请使用 /compress 或 /new 后继续。"
+            )
+        if on_status:
+            on_status({
+                "type": "context_recovery_failed",
+                "category": category,
+                "error": sanitize_text(str(error), max_length=500),
+            })
+        return {
+            "content": content,
+            "tool_calls": None,
+            "usage": {"input": 0, "output": 0},
+            "finish_reason": "context_recovery_failed",
+        }
+
+    def _call_llm_with_recovery(api_messages, tools, estimated_context_tokens):
+        attempts = 0
+        max_attempts = max(
+            1,
+            int(getattr(agent, "compression_max_passes", 1) or 1) + 1,
+        )
+        while True:
+            try:
+                return (
+                    agent.llm.stream_chat(api_messages, tools, on_delta),
+                    estimated_context_tokens,
+                )
+            except Exception as exc:
+                category = classify_llm_error(exc)
+                if category == OUTPUT_LIMIT:
+                    if attempts < max_attempts and _reduce_output_tokens_from_error(
+                        exc,
+                        estimated_context_tokens,
+                    ):
+                        attempts += 1
+                        continue
+                    return _context_recovery_failed_response(exc, category), estimated_context_tokens
+
+                if category not in (CONTEXT_OVERFLOW, PAYLOAD_TOO_LARGE):
+                    raise
+
+                if attempts >= max_attempts:
+                    return _context_recovery_failed_response(exc, category), estimated_context_tokens
+
+                attempts += 1
+                _update_context_window_from_error(exc)
+                if not getattr(agent, "compression_enabled", True):
+                    return _context_recovery_failed_response(exc, category), estimated_context_tokens
+                if on_status:
+                    on_status({
+                        "type": "context_overflow_recovering",
+                        "category": category,
+                        "attempt": attempts,
+                    })
+                keep_tokens = max(
+                    1,
+                    min(
+                        getattr(agent, "compression_keep_tokens", 1),
+                        getattr(agent, "compression_target_tokens", 1),
+                    ),
+                )
+                compaction_result = _call_compress_messages(
+                    force=True,
+                    keep_tokens=keep_tokens,
+                )
+                if not isinstance(compaction_result, dict) or not compaction_result.get("compressed"):
+                    return _context_recovery_failed_response(exc, category), estimated_context_tokens
+                if callable(checkpoint_conversation):
+                    checkpoint_conversation()
+                api_messages, estimated_context_tokens = _prepare_api_messages(tools)
+
+    on_delta.state = {"in_reasoning": False}
+
+    for _ in range(agent.max_iterations):
+        tools = agent.tools.get_definitions()
+        task_context = ""
+        if task_manager is not None:
+            try:
+                task_context = task_manager.prompt_context()
+            except Exception:
+                task_context = ""
+        turn_context.system_prompt = getattr(agent, "system_prompt", "")
+        turn_context.task_context = task_context
+        api_messages, estimated_context_tokens = _prepare_api_messages(tools)
         turn_context.estimated_context_tokens = estimated_context_tokens
-        response = agent.llm.stream_chat(api_messages, tools, on_delta)
+        response, estimated_context_tokens = _call_llm_with_recovery(
+            api_messages,
+            tools,
+            estimated_context_tokens,
+        )
+        turn_context.estimated_context_tokens = estimated_context_tokens
         agent.count_tokens(response["usage"])
         update_current_context = getattr(agent, "update_current_context", None)
         if callable(update_current_context):
@@ -545,6 +737,12 @@ def run_conversation_loop(
         final_text = response["content"] or ""
         agent.messages.append({"role": "assistant", "content": final_text})
         if callable(checkpoint_conversation):
+            checkpoint_conversation()
+        if _compact_if_needed(
+            _estimate_persistent_history_tokens(),
+            phase="post_turn",
+            recompute_tokens=_estimate_persistent_history_tokens,
+        ) and callable(checkpoint_conversation):
             checkpoint_conversation()
         schedule_maintenance = getattr(agent, "schedule_post_turn_maintenance", None)
         if callable(schedule_maintenance):

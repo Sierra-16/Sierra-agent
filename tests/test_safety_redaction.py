@@ -7,11 +7,20 @@ class SafetyRedactionTests(unittest.TestCase):
     def test_skill_reads_are_low_risk_and_execution_is_high_risk(self):
         gate = SafetyGate()
 
+        self.assertEqual(gate.assess("read_file", {"file_path": "notes.txt"}).level, "low")
+        self.assertEqual(gate.assess("web_fetch", {"url": "https://example.com"}).level, "low")
+        self.assertEqual(gate.assess("web_search", {"query": "Sierra"}).level, "low")
         self.assertEqual(gate.assess("skills_list").level, "low")
         self.assertEqual(gate.assess("skill_render_template").level, "low")
         self.assertEqual(gate.assess("skill_usage_stats").level, "low")
         self.assertEqual(gate.assess("skill_run_script").level, "high")
         self.assertEqual(gate.assess("skill_manage").level, "high")
+
+    def test_sensitive_file_reads_still_require_approval(self):
+        gate = SafetyGate()
+
+        self.assertEqual(gate.assess("read_file", {"file_path": ".env"}).level, "high")
+        self.assertEqual(gate.assess("read_file", {"file_path": "config.json"}).level, "high")
 
     def test_redacts_api_key_with_space(self):
         self.assertNotIn(

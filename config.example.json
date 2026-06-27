@@ -16,10 +16,7 @@
       "resolve_task_execution"
     ],
     "ask": [
-      "read_file",
       "write_file",
-      "web_fetch",
-      "web_search",
       "save_memory",
       "delete_memory",
       "memory_forget",
@@ -65,9 +62,14 @@
   "context": {
     "enabled": true,
     "max_prompt_tokens": 120000,
-    "compression_threshold": 0.5,
+    "compression_context_window": "model",
+    "compression_threshold": 0.8,
     "target_ratio": 0.2,
     "keep_recent_ratio": 0.25,
+    "min_savings_ratio": 0.1,
+    "failure_cooldown_seconds": 600,
+    "protect_first_messages": 3,
+    "protect_last_messages": 8,
     "max_compression_passes": 3,
     "transcript_max_chars": 160000,
     "old_tool_result_max_chars": 2400,

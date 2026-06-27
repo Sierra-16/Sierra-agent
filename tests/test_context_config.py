@@ -1,6 +1,6 @@
 import unittest
 
-from aiagent.agent import _resolve_prompt_budget
+from aiagent.agent import _resolve_compression_window, _resolve_prompt_budget
 
 
 class ContextConfigTests(unittest.TestCase):
@@ -21,6 +21,22 @@ class ContextConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(budget, 119_808)
+
+    def test_compression_window_defaults_to_model_window(self):
+        window = _resolve_compression_window(
+            1_000_000,
+            {"max_prompt_tokens": 120_000},
+        )
+
+        self.assertEqual(window, 1_000_000)
+
+    def test_compression_window_can_be_overridden(self):
+        window = _resolve_compression_window(
+            1_000_000,
+            {"compression_context_window": 256_000},
+        )
+
+        self.assertEqual(window, 256_000)
 
 
 if __name__ == "__main__":

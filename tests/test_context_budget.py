@@ -108,6 +108,10 @@ class ConversationLoopContextBudgetTests(unittest.TestCase):
         self.assertIn("current question", rendered_request)
         self.assertIn("old answer", str(agent.messages))
         self.assertTrue(any(event["type"] == "context_budget_trimmed" for event in statuses))
+        self.assertFalse(any(
+            event["type"].startswith("context_compaction")
+            for event in statuses
+        ))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import copy
 import json
 import logging
 import os
+import time
 
 from .background_jobs import BackgroundJobQueue
 from .conversation_store import ConversationStore
@@ -31,7 +32,9 @@ from .context_compaction import (
     build_compaction_transcript,
     build_fallback_summary,
     build_summary_message,
-    select_compaction_split,
+    prune_old_tool_results,
+    select_compaction_window,
+    strip_historical_media,
 )
 from .tasks import TaskCheckpointStore, TaskManager
 from .token_utils import estimate_tokens
@@ -61,6 +64,20 @@ def _resolve_prompt_budget(
     except (TypeError, ValueError):
         cap = 120000
     return max(4096, min(model_prompt_budget, cap))
+
+
+def _resolve_compression_window(model_context_window, context_config):
+    model_window = max(1, int(model_context_window or 1))
+    raw_window = context_config.get(
+        "compression_context_window",
+        context_config.get("compression_window_tokens", "model"),
+    )
+    if str(raw_window).strip().lower() in {"", "0", "none", "model", "false"}:
+        return model_window
+    try:
+        return max(1, int(raw_window))
+    except (TypeError, ValueError):
+        return model_window
 
 
 def _coerce_ratio(value, *, default, minimum, maximum):
@@ -210,28 +227,53 @@ class Agent:
             max_tokens,
             context_config,
         )
+        self.compression_context_window = _resolve_compression_window(
+            self.model_context_window,
+            context_config,
+        )
         self.compression_enabled = context_config.get("enabled", True) is not False
         compression_threshold_ratio = _coerce_ratio(
-            context_config.get("compression_threshold", context_config.get("threshold", 0.5)),
-            default=0.5,
+            context_config.get("compression_threshold", context_config.get("threshold", 0.8)),
+            default=0.8,
             minimum=0.1,
             maximum=0.95,
         )
+        self.compression_threshold_ratio = compression_threshold_ratio
         compression_target_ratio = _coerce_ratio(
             context_config.get("target_ratio", 0.2),
             default=0.2,
             minimum=0.05,
             maximum=0.8,
         )
+        self.compression_target_ratio = compression_target_ratio
         compression_keep_ratio = _coerce_ratio(
             context_config.get("keep_recent_ratio", 0.25),
             default=0.25,
             minimum=0.05,
             maximum=0.9,
         )
+        self.compression_keep_ratio = compression_keep_ratio
+        self.compression_min_savings_ratio = _coerce_ratio(
+            context_config.get("min_savings_ratio", 0.10),
+            default=0.10,
+            minimum=0.0,
+            maximum=0.9,
+        )
+        self.compression_failure_cooldown_seconds = max(
+            0,
+            int(context_config.get("failure_cooldown_seconds", 600) or 0),
+        )
         self.compression_max_passes = max(
             1,
             min(5, int(context_config.get("max_compression_passes", 3) or 3)),
+        )
+        self.compression_protect_first_messages = max(
+            0,
+            int(context_config.get("protect_first_messages", 3) or 0),
+        )
+        self.compression_protect_last_messages = max(
+            0,
+            int(context_config.get("protect_last_messages", 8) or 0),
         )
         self.old_tool_result_max_chars = max(
             500,
@@ -245,6 +287,11 @@ class Agent:
             0,
             int(context_config.get("recent_tool_result_message_count", 8) or 8),
         )
+        self.compression_count = 0
+        self._ineffective_compression_count = 0
+        self._last_compression_savings_ratio = 1.0
+        self._summary_failure_cooldown_until = 0.0
+        self.compression_events = []
         self.current_context_tokens = 0
         self.context_tokens_estimated = False
         self.model = model
@@ -321,18 +368,7 @@ class Agent:
         self.max_iterations = 15
         self.total_input_tokens = 0
         self.total_output_tokens = 0
-        self.max_compress_tokens = max(
-            1,
-            int(self.context_window * compression_threshold_ratio),
-        )
-        self.compression_target_tokens = max(
-            1,
-            int(self.context_window * compression_target_ratio),
-        )
-        self.compression_keep_tokens = max(
-            1,
-            int(self.context_window * compression_keep_ratio),
-        )
+        self._recalculate_compression_budgets()
         self.compression_transcript_chars = max(
             1000,
             min(
@@ -340,6 +376,36 @@ class Agent:
                 self.context_window // 2,
             ),
         )
+
+    def _recalculate_compression_budgets(self):
+        self.max_compress_tokens = max(
+            1,
+            int(self.compression_context_window * self.compression_threshold_ratio),
+        )
+        self.compression_target_tokens = max(
+            1,
+            int(self.max_compress_tokens * self.compression_target_ratio),
+        )
+        self.compression_keep_tokens = max(
+            1,
+            int(self.max_compress_tokens * self.compression_keep_ratio),
+        )
+
+    def update_context_window(self, context_window):
+        context_window = max(1, int(context_window or 1))
+        self.model_context_window = context_window
+        self.compression_context_window = context_window
+        output_headroom = max(1024, int(getattr(self.llm, "max_tokens", 4096) or 4096))
+        self.context_window = min(
+            self.context_window,
+            max(4096, context_window - output_headroom),
+        )
+        self._recalculate_compression_budgets()
+        return {
+            "model_context_window": self.model_context_window,
+            "context_window": self.context_window,
+            "max_compress_tokens": self.max_compress_tokens,
+        }
 
     def chat(
         self,
@@ -885,6 +951,8 @@ class Agent:
         self._turns_since_companion_review = 0
         self.current_context_tokens = 0
         self.context_tokens_estimated = False
+        self._ineffective_compression_count = 0
+        self._summary_failure_cooldown_until = 0.0
 
     def count_tokens(self, usage):
         self.total_input_tokens += usage["input"]
@@ -914,6 +982,7 @@ class Agent:
             "model_context_window": getattr(self, "model_context_window", self.context_window),
             "context_budget": self.context_window,
             "context_estimated": self.context_tokens_estimated,
+            "compression_count": getattr(self, "compression_count", 0),
         }
 
     def save_conversation(self, usage, title=""):
@@ -1349,14 +1418,69 @@ class Agent:
         """Summarize old complete turns and keep recent turns verbatim."""
         before_messages = len(self.messages)
         before_tokens = estimate_tokens(self.messages)
+        now = time.time()
+        summary_failure_cooldown_until = getattr(
+            self,
+            "_summary_failure_cooldown_until",
+            0.0,
+        )
+        if not force and summary_failure_cooldown_until > now:
+            return {
+                "compressed": False,
+                "reason": "summary_failure_cooldown",
+                "cooldown_remaining_seconds": int(
+                    summary_failure_cooldown_until - now
+                ),
+                "before_messages": before_messages,
+                "after_messages": before_messages,
+                "before_tokens": before_tokens,
+                "after_tokens": before_tokens,
+            }
+        if not force and getattr(self, "_ineffective_compression_count", 0) >= 2:
+            return {
+                "compressed": False,
+                "reason": "ineffective_compression_backoff",
+                "before_messages": before_messages,
+                "after_messages": before_messages,
+                "before_tokens": before_tokens,
+                "after_tokens": before_tokens,
+                "last_savings_ratio": getattr(
+                    self,
+                    "_last_compression_savings_ratio",
+                    0.0,
+                ),
+            }
         if keep_tokens is None:
             keep_tokens = self.compression_keep_tokens
-        split = select_compaction_split(
+        pruned_messages, pruned_tool_results = prune_old_tool_results(
+            self.messages,
+            protect_tail_count=getattr(self, "compression_protect_last_messages", 8),
+            max_chars=getattr(self, "old_tool_result_max_chars", 2400),
+        )
+        if pruned_tool_results:
+            self.messages = pruned_messages
+        window = select_compaction_window(
             self.messages,
             keep_tokens=keep_tokens,
+            protect_first_n=getattr(self, "compression_protect_first_messages", 0),
+            protect_last_n=getattr(self, "compression_protect_last_messages", 0),
             force=force,
         )
-        if split is None:
+        if window is None:
+            after_tokens = estimate_tokens(self.messages)
+            if pruned_tool_results and after_tokens < before_tokens:
+                self.refresh_context_estimate()
+                result = {
+                    "compressed": True,
+                    "reason": "pruned_tool_results",
+                    "before_messages": before_messages,
+                    "after_messages": len(self.messages),
+                    "before_tokens": before_tokens,
+                    "after_tokens": after_tokens,
+                    "pruned_tool_results": pruned_tool_results,
+                }
+                self._record_compression_result(result)
+                return result
             return {
                 "compressed": False,
                 "reason": "insufficient_history",
@@ -1366,8 +1490,10 @@ class Agent:
                 "after_tokens": before_tokens,
             }
 
-        old_messages = self.messages[:split]
-        recent_messages = self.messages[split:]
+        compress_start, compress_end = window
+        head_messages = self.messages[:compress_start]
+        old_messages = self.messages[compress_start:compress_end]
+        recent_messages = self.messages[compress_end:]
         transcript = build_compaction_transcript(
             old_messages,
             max_chars=self.compression_transcript_chars,
@@ -1397,9 +1523,14 @@ class Agent:
             summary_message = build_summary_message(
                 summary_response.get("content") or ""
             )
-            compacted_messages = [summary_message, *recent_messages]
+            compacted_messages = [*head_messages, summary_message, *recent_messages]
+            compacted_messages, stripped_media = strip_historical_media(compacted_messages)
             after_tokens = estimate_tokens(compacted_messages)
             if after_tokens >= before_tokens:
+                self._ineffective_compression_count = (
+                    getattr(self, "_ineffective_compression_count", 0) + 1
+                )
+                self._last_compression_savings_ratio = 0.0
                 return {
                     "compressed": False,
                     "reason": "no_token_savings",
@@ -1411,25 +1542,44 @@ class Agent:
 
             self.messages = compacted_messages
             self.refresh_context_estimate()
-            return {
+            result = {
                 "compressed": True,
                 "reason": "compressed",
                 "before_messages": before_messages,
                 "after_messages": len(self.messages),
                 "summarized_messages": len(old_messages),
+                "protected_head_messages": len(head_messages),
                 "kept_messages": len(recent_messages),
                 "before_tokens": before_tokens,
                 "after_tokens": after_tokens,
+                "pruned_tool_results": pruned_tool_results,
+                "stripped_media_messages": stripped_media,
             }
+            self._record_compression_result(result)
+            return result
         except Exception as exc:
             logger.warning("Context compaction failed: %s", exc)
+            failure_cooldown = getattr(
+                self,
+                "compression_failure_cooldown_seconds",
+                0,
+            )
+            if failure_cooldown:
+                self._summary_failure_cooldown_until = (
+                    time.time() + failure_cooldown
+                )
             fallback_error = ""
             try:
                 fallback_summary = build_fallback_summary(old_messages)
                 summary_message = build_summary_message(fallback_summary)
-                compacted_messages = [summary_message, *recent_messages]
+                compacted_messages = [*head_messages, summary_message, *recent_messages]
+                compacted_messages, stripped_media = strip_historical_media(compacted_messages)
                 after_tokens = estimate_tokens(compacted_messages)
                 if after_tokens >= before_tokens:
+                    self._ineffective_compression_count = (
+                        getattr(self, "_ineffective_compression_count", 0) + 1
+                    )
+                    self._last_compression_savings_ratio = 0.0
                     return {
                         "compressed": False,
                         "reason": "summary_failed",
@@ -1439,10 +1589,10 @@ class Agent:
                         "after_messages": before_messages,
                         "before_tokens": before_tokens,
                         "after_tokens": before_tokens,
-                    }
+                }
                 self.messages = compacted_messages
                 self.refresh_context_estimate()
-                return {
+                result = {
                     "compressed": True,
                     "reason": "summary_fallback",
                     "fallback": True,
@@ -1450,10 +1600,15 @@ class Agent:
                     "before_messages": before_messages,
                     "after_messages": len(self.messages),
                     "summarized_messages": len(old_messages),
+                    "protected_head_messages": len(head_messages),
                     "kept_messages": len(recent_messages),
                     "before_tokens": before_tokens,
                     "after_tokens": after_tokens,
+                    "pruned_tool_results": pruned_tool_results,
+                    "stripped_media_messages": stripped_media,
                 }
+                self._record_compression_result(result)
+                return result
             except Exception as fallback_exc:
                 logger.warning(
                     "Fallback context compaction failed: %s",
@@ -1470,3 +1625,32 @@ class Agent:
                 "before_tokens": before_tokens,
                 "after_tokens": before_tokens,
             }
+
+    def _record_compression_result(self, result):
+        if not result.get("compressed"):
+            return
+        before = max(1, int(result.get("before_tokens", 0) or 0))
+        after = max(0, int(result.get("after_tokens", 0) or 0))
+        savings_ratio = max(0.0, (before - after) / before)
+        self._last_compression_savings_ratio = savings_ratio
+        if savings_ratio < getattr(self, "compression_min_savings_ratio", 0.10):
+            self._ineffective_compression_count = (
+                getattr(self, "_ineffective_compression_count", 0) + 1
+            )
+        else:
+            self._ineffective_compression_count = 0
+        self.compression_count = getattr(self, "compression_count", 0) + 1
+        event = {
+            "count": self.compression_count,
+            "created_at": time.time(),
+            "reason": result.get("reason", ""),
+            "before_tokens": before,
+            "after_tokens": after,
+            "savings_ratio": savings_ratio,
+            "before_messages": result.get("before_messages", 0),
+            "after_messages": result.get("after_messages", 0),
+        }
+        if not hasattr(self, "compression_events"):
+            self.compression_events = []
+        self.compression_events.append(event)
+        self.compression_events = self.compression_events[-50:]

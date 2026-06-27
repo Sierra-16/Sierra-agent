@@ -11,7 +11,10 @@ LOW_RISK_TOOLS = {
     "calculator",
     "get_time",
     "list_directory",
+    "read_file",
     "search_files",
+    "web_fetch",
+    "web_search",
     "skills_list",
     "skill_view",
     "skill_render_template",
@@ -24,9 +27,6 @@ LOW_RISK_TOOLS = {
 }
 
 MEDIUM_RISK_TOOLS = {
-    "read_file",
-    "web_fetch",
-    "web_search",
 }
 
 HIGH_RISK_TOOLS = {
