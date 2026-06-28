@@ -19,6 +19,7 @@ from .skills.manager import SkillManager
 from .skills.prompt_index import SkillPromptIndex
 from .skills.usage_store import SkillUsageStore
 from .tools.skill_view_tool import configure_skill_tools
+from .tools.session_tool import configure_session_tools
 from .mcp import MCPManager
 from .safety import SafetyGate
 from .permission_policy import PermissionPolicy
@@ -187,6 +188,7 @@ class Agent:
             )
         except Exception as exc:
             logger.warning("Session database disabled: %s", exc)
+        configure_session_tools(self.session_db)
         self._bootstrap_session_db_from_json()
         self.conv_id = None
         self.task_manager = None
