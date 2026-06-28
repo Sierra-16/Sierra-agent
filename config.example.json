@@ -30,6 +30,7 @@
       "memory_forget",
       "memory_clear",
       "powershell",
+      "terminal",
       "cron_add",
       "cron_remove",
       "skill_run_script",

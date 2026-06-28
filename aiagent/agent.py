@@ -680,6 +680,11 @@ class Agent:
                 self._path_is_in_workspace(arguments.get("cwd") or ".")
                 and self._powershell_command_may_mutate(arguments.get("command"))
             )
+        if name == "terminal":
+            return (
+                self._path_is_in_workspace(arguments.get("workdir") or ".")
+                and self._powershell_command_may_mutate(arguments.get("command"))
+            )
         return False
 
     def _path_is_in_workspace(self, path):
@@ -714,6 +719,9 @@ class Agent:
         if tool_name == "powershell":
             command = " ".join(str(arguments.get("command") or "").split())
             return f"before powershell {command}"[:200]
+        if tool_name == "terminal":
+            command = " ".join(str(arguments.get("command") or "").split())
+            return f"before terminal {command}"[:200]
         return f"before {tool_name}"[:200]
 
     def _powershell_command_may_mutate(self, command):

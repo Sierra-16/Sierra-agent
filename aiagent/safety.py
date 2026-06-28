@@ -17,6 +17,7 @@ LOW_RISK_TOOLS = {
     "web_search",
     "browser_fetch",
     "file_info",
+    "process",
     "skills_list",
     "skill_view",
     "skill_render_template",
@@ -46,6 +47,7 @@ HIGH_RISK_TOOLS = {
     "memory_forget",
     "memory_clear",
     "powershell",
+    "terminal",
     "skill_run_script",
     "skill_manage",
 }
@@ -133,6 +135,18 @@ class SafetyGate:
                 "high",
                 "该工具会执行 PowerShell 命令，可能修改本地或系统状态",
             )
+
+        if normalized == "terminal":
+            return ToolRisk(
+                "high",
+                "该工具会执行终端命令，可能修改本地或系统状态",
+            )
+
+        if normalized == "process":
+            action = str(arguments.get("action") or "").lower()
+            if action in {"list", "poll", "log", "wait"}:
+                return ToolRisk("low", "只读取或等待后台进程状态")
+            return ToolRisk("high", "该工具会控制后台进程状态")
 
         if normalized == "read_file" and self._reads_sensitive_path(arguments):
             return ToolRisk("high", "读取目标可能包含密钥、配置或凭证")

@@ -12,4 +12,5 @@ from . import browser_tool
 from . import memory_tool
 from . import skill_view_tool
 from . import powershell_tool
+from . import terminal_tool
 from . import user_input_tool

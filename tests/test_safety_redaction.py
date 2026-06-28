@@ -32,6 +32,15 @@ class SafetyRedactionTests(unittest.TestCase):
         ):
             self.assertEqual(gate.assess(name).level, "high")
 
+    def test_terminal_is_high_risk_but_process_reads_are_low_risk(self):
+        gate = SafetyGate()
+
+        self.assertEqual(gate.assess("terminal", {"command": "dir"}).level, "high")
+        self.assertEqual(gate.assess("process", {"action": "list"}).level, "low")
+        self.assertEqual(gate.assess("process", {"action": "log"}).level, "low")
+        self.assertEqual(gate.assess("process", {"action": "wait"}).level, "low")
+        self.assertEqual(gate.assess("process", {"action": "kill"}).level, "high")
+
     def test_cron_mutations_are_medium_risk(self):
         gate = SafetyGate()
 
