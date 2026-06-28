@@ -126,6 +126,14 @@ class CheckpointManagerTests(unittest.TestCase):
             "terminal",
             {"workdir": ".", "command": "Remove-Item note.txt"},
         ))
+        self.assertTrue(agent._tool_should_checkpoint(
+            "execute_code",
+            {"workdir": "."},
+        ))
+        self.assertTrue(agent._tool_should_checkpoint(
+            "browser_screenshot",
+            {"path": "shot.png"},
+        ))
         self.assertFalse(agent._tool_should_checkpoint(
             "powershell",
             {"cwd": ".", "command": "Get-ChildItem"},
@@ -133,6 +141,10 @@ class CheckpointManagerTests(unittest.TestCase):
         self.assertFalse(agent._tool_should_checkpoint(
             "terminal",
             {"workdir": ".", "command": "Get-ChildItem"},
+        ))
+        self.assertFalse(agent._tool_should_checkpoint(
+            "browser_screenshot",
+            {},
         ))
         self.assertFalse(agent._tool_should_checkpoint(
             "read_file",

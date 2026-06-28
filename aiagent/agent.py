@@ -685,6 +685,10 @@ class Agent:
                 self._path_is_in_workspace(arguments.get("workdir") or ".")
                 and self._powershell_command_may_mutate(arguments.get("command"))
             )
+        if name == "execute_code":
+            return self._path_is_in_workspace(arguments.get("workdir") or ".")
+        if name == "browser_screenshot":
+            return bool(arguments.get("path")) and self._path_is_in_workspace(arguments.get("path"))
         return False
 
     def _path_is_in_workspace(self, path):
@@ -722,6 +726,11 @@ class Agent:
         if tool_name == "terminal":
             command = " ".join(str(arguments.get("command") or "").split())
             return f"before terminal {command}"[:200]
+        if tool_name == "execute_code":
+            return "before execute_code"[:200]
+        if tool_name == "browser_screenshot":
+            target = str(arguments.get("path") or "").strip()
+            return f"before browser_screenshot {target}"[:200]
         return f"before {tool_name}"[:200]
 
     def _powershell_command_may_mutate(self, command):

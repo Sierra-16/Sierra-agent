@@ -16,6 +16,11 @@ LOW_RISK_TOOLS = {
     "web_fetch",
     "web_search",
     "browser_fetch",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_scroll",
+    "browser_back",
+    "browser_close",
     "file_info",
     "process",
     "skills_list",
@@ -48,6 +53,11 @@ HIGH_RISK_TOOLS = {
     "memory_clear",
     "powershell",
     "terminal",
+    "execute_code",
+    "browser_click",
+    "browser_type",
+    "browser_press",
+    "browser_screenshot",
     "skill_run_script",
     "skill_manage",
 }
@@ -147,6 +157,11 @@ class SafetyGate:
             if action in {"list", "poll", "log", "wait"}:
                 return ToolRisk("low", "只读取或等待后台进程状态")
             return ToolRisk("high", "该工具会控制后台进程状态")
+
+        if normalized == "browser_console":
+            if str(arguments.get("expression") or "").strip():
+                return ToolRisk("high", "该工具会在浏览器页面中执行 JavaScript")
+            return ToolRisk("low", "只读取浏览器控制台消息")
 
         if normalized == "read_file" and self._reads_sensitive_path(arguments):
             return ToolRisk("high", "读取目标可能包含密钥、配置或凭证")

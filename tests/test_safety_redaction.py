@@ -41,6 +41,22 @@ class SafetyRedactionTests(unittest.TestCase):
         self.assertEqual(gate.assess("process", {"action": "wait"}).level, "low")
         self.assertEqual(gate.assess("process", {"action": "kill"}).level, "high")
 
+    def test_execute_code_and_browser_actions_have_risk_boundaries(self):
+        gate = SafetyGate()
+
+        self.assertEqual(gate.assess("execute_code", {"code": "print(1)"}).level, "high")
+        self.assertEqual(gate.assess("browser_navigate", {"url": "https://example.com"}).level, "low")
+        self.assertEqual(gate.assess("browser_snapshot").level, "low")
+        self.assertEqual(gate.assess("browser_scroll").level, "low")
+        self.assertEqual(gate.assess("browser_back").level, "low")
+        self.assertEqual(gate.assess("browser_close").level, "low")
+        self.assertEqual(gate.assess("browser_click", {"ref": "e1"}).level, "high")
+        self.assertEqual(gate.assess("browser_type", {"ref": "e1", "text": "hello"}).level, "high")
+        self.assertEqual(gate.assess("browser_press", {"key": "Enter"}).level, "high")
+        self.assertEqual(gate.assess("browser_screenshot", {"path": "shot.png"}).level, "high")
+        self.assertEqual(gate.assess("browser_console", {}).level, "low")
+        self.assertEqual(gate.assess("browser_console", {"expression": "location.href"}).level, "high")
+
     def test_cron_mutations_are_medium_risk(self):
         gate = SafetyGate()
 

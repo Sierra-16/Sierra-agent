@@ -50,10 +50,10 @@ tui/memory/MEMORY.md
 /*.md
 !README.md
 /*.txt
+!requirements.txt
 
 # IDE and OS files
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
