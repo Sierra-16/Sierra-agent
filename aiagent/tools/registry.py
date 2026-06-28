@@ -1,19 +1,57 @@
 import json
 class ToolEntry:
-    __slots__ = ("name", "description", "parameters", "handler")
-    def __init__(self, name, description, parameters, handler):
+    __slots__ = (
+        "name",
+        "description",
+        "parameters",
+        "handler",
+        "toolset",
+        "emoji",
+        "max_result_size_chars",
+    )
+
+    def __init__(
+        self,
+        name,
+        description,
+        parameters,
+        handler,
+        toolset="core",
+        emoji="",
+        max_result_size_chars=None,
+    ):
         self.name = name
         self.description = description
         self.parameters = parameters
         self.handler = handler
+        self.toolset = toolset
+        self.emoji = emoji
+        self.max_result_size_chars = max_result_size_chars
 
 
 class ToolRegistry:
     def __init__(self):
         self._tools = {}
 
-    def register(self, name, description, parameters, handler):
-        self._tools[name] = ToolEntry(name, description, parameters, handler)
+    def register(
+        self,
+        name,
+        description,
+        parameters,
+        handler,
+        toolset="core",
+        emoji="",
+        max_result_size_chars=None,
+    ):
+        self._tools[name] = ToolEntry(
+            name,
+            description,
+            parameters,
+            handler,
+            toolset=toolset,
+            emoji=emoji,
+            max_result_size_chars=max_result_size_chars,
+        )
 
     def unregister(self, name):
         self._tools.pop(name, None)
@@ -25,6 +63,15 @@ class ToolRegistry:
 
     def names(self):
         return list(self._tools)
+
+    def get_entry(self, name):
+        return self._tools.get(name)
+
+    def get_max_result_size(self, name, default=None):
+        entry = self.get_entry(name)
+        if entry is not None and entry.max_result_size_chars is not None:
+            return entry.max_result_size_chars
+        return default
 
     def get_definitions(self):
         return [

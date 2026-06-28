@@ -99,6 +99,26 @@ class CheckpointManagerTests(unittest.TestCase):
             {"file_path": "note.txt"},
         ))
         self.assertTrue(agent._tool_should_checkpoint(
+            "patch_file",
+            {"file_path": "note.txt"},
+        ))
+        self.assertTrue(agent._tool_should_checkpoint(
+            "delete_path",
+            {"path": "note.txt"},
+        ))
+        self.assertTrue(agent._tool_should_checkpoint(
+            "move_path",
+            {"source": "note.txt", "destination": "renamed.txt"},
+        ))
+        self.assertTrue(agent._tool_should_checkpoint(
+            "copy_path",
+            {"source": "note.txt", "destination": "copy.txt"},
+        ))
+        self.assertTrue(agent._tool_should_checkpoint(
+            "make_directory",
+            {"path": "nested"},
+        ))
+        self.assertTrue(agent._tool_should_checkpoint(
             "powershell",
             {"cwd": ".", "command": "Remove-Item note.txt"},
         ))
@@ -109,6 +129,10 @@ class CheckpointManagerTests(unittest.TestCase):
         self.assertFalse(agent._tool_should_checkpoint(
             "read_file",
             {"file_path": "note.txt"},
+        ))
+        self.assertFalse(agent._tool_should_checkpoint(
+            "file_info",
+            {"path": "note.txt"},
         ))
         self.assertFalse(agent._tool_should_checkpoint(
             "write_file",

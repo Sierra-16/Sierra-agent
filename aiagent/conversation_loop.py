@@ -16,6 +16,7 @@ from .context_errors import (
 from .safety import sanitize_arguments, sanitize_text
 from .token_utils import estimate_tokens
 from .turn_context import build_memory_context, build_turn_context
+from .tools.tool_result_storage import maybe_persist_tool_result
 
 
 SKILL_EVENT_BY_TOOL = {
@@ -333,6 +334,16 @@ def run_conversation_loop(
                 error=str(exc),
             )
             raise
+        get_max_result_size = getattr(agent.tools, "get_max_result_size", None)
+        threshold = None
+        if callable(get_max_result_size):
+            threshold = get_max_result_size(name, default=None)
+        result = maybe_persist_tool_result(
+            result,
+            tool_name=name,
+            tool_call_id=str(tc.get("id") or name),
+            threshold=threshold,
+        )
         duration_ms = round((time.perf_counter() - execution_started) * 1000)
         success, error = _tool_result_status(result)
         if task_manager is not None:

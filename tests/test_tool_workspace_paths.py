@@ -36,6 +36,17 @@ class ToolWorkspacePathTests(unittest.TestCase):
         self.assertEqual(result["file_path"], target)
         self.assertEqual(result["content"], "hello from workspace")
 
+    def test_read_file_supports_line_pagination(self):
+        target = os.path.join(self.workspace, "paged.txt")
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("one\ntwo\nthree\nfour\n")
+
+        result = json.loads(read_file("paged.txt", offset=2, limit=2))
+
+        self.assertEqual(result["content"], "two\nthree")
+        self.assertTrue(result["has_more"])
+        self.assertEqual(result["next_offset"], 4)
+
     def test_write_file_resolves_relative_path_under_workspace(self):
         result = json.loads(write_file("nested/out.txt", "saved"))
         target = os.path.join(self.workspace, "nested", "out.txt")
@@ -66,6 +77,18 @@ class ToolWorkspacePathTests(unittest.TestCase):
 
         self.assertEqual(result["dir_path"], self.workspace)
         self.assertEqual(result["matches"], [os.path.join(self.workspace, "match.py")])
+
+    def test_search_files_supports_pagination(self):
+        for name in ("a.py", "b.py", "c.py"):
+            with open(os.path.join(self.workspace, name), "w", encoding="utf-8") as f:
+                f.write(name)
+
+        result = json.loads(search_files("*.py", offset=1, limit=1))
+
+        self.assertEqual(result["matches"], [os.path.join(self.workspace, "b.py")])
+        self.assertEqual(result["total"], 3)
+        self.assertTrue(result["has_more"])
+        self.assertEqual(result["next_offset"], 2)
 
 
 if __name__ == "__main__":

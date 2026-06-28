@@ -16,6 +16,7 @@ LOW_RISK_TOOLS = {
     "web_fetch",
     "web_search",
     "browser_fetch",
+    "file_info",
     "skills_list",
     "skill_view",
     "skill_render_template",
@@ -35,6 +36,11 @@ MEDIUM_RISK_TOOLS = {
 
 HIGH_RISK_TOOLS = {
     "write_file",
+    "patch_file",
+    "delete_path",
+    "move_path",
+    "copy_path",
+    "make_directory",
     "save_memory",
     "delete_memory",
     "memory_forget",

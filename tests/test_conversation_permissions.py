@@ -1,7 +1,9 @@
 import json
+import os
 import unittest
 
 from aiagent.conversation_loop import run_conversation_loop
+from aiagent.tools.tool_result_storage import PERSISTED_OUTPUT_TAG
 from aiagent.permission_policy import PermissionPolicy
 from aiagent.safety import SafetyGate
 
@@ -19,6 +21,9 @@ class FakeTools:
         if self.forced_result is not None:
             return self.forced_result
         return json.dumps({"ok": True, "tool": name}, ensure_ascii=False)
+
+    def get_max_result_size(self, name, default=None):
+        return default
 
 
 class FakeAudit:
@@ -191,6 +196,21 @@ class ConversationPermissionTests(unittest.TestCase):
         self.assertFalse(agent.audit.events[0]["success"])
         self.assertFalse(agent.skill_usage.events[0]["success"])
         self.assertEqual(agent.skill_usage.events[0]["error"], "failed")
+
+    def test_large_tool_result_is_persisted_before_message_append(self):
+        agent = FakeAgent({"allow": ["write_file"]})
+        agent.tools.forced_result = "x" * 100_001
+
+        run_conversation_loop(agent, "write the file")
+
+        tool_message = next(message for message in agent.messages if message["role"] == "tool")
+        self.assertIn(PERSISTED_OUTPUT_TAG, tool_message["content"])
+        path_line = next(
+            line for line in tool_message["content"].splitlines()
+            if line.startswith("Full output saved to:")
+        )
+        file_path = path_line.split(":", 1)[1].strip()
+        self.assertTrue(os.path.exists(file_path))
 
 
 if __name__ == "__main__":

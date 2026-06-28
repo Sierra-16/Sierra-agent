@@ -14,9 +14,23 @@ class SafetyRedactionTests(unittest.TestCase):
         self.assertEqual(gate.assess("skill_render_template").level, "low")
         self.assertEqual(gate.assess("skill_usage_stats").level, "low")
         self.assertEqual(gate.assess("browser_fetch", {"url": "https://example.com"}).level, "low")
+        self.assertEqual(gate.assess("file_info", {"path": "notes.txt"}).level, "low")
         self.assertEqual(gate.assess("mcp__docs__search", {"query": "Sierra"}).level, "low")
         self.assertEqual(gate.assess("skill_run_script").level, "high")
         self.assertEqual(gate.assess("skill_manage").level, "high")
+
+    def test_file_mutation_tools_are_high_risk(self):
+        gate = SafetyGate()
+
+        for name in (
+            "write_file",
+            "patch_file",
+            "delete_path",
+            "move_path",
+            "copy_path",
+            "make_directory",
+        ):
+            self.assertEqual(gate.assess(name).level, "high")
 
     def test_cron_mutations_are_medium_risk(self):
         gate = SafetyGate()

@@ -666,8 +666,15 @@ class Agent:
     def _tool_should_checkpoint(self, tool_name, arguments):
         name = str(tool_name or "")
         arguments = arguments if isinstance(arguments, dict) else {}
-        if name == "write_file":
+        if name in ("write_file", "patch_file"):
             return self._path_is_in_workspace(arguments.get("file_path"))
+        if name in ("delete_path", "make_directory"):
+            return self._path_is_in_workspace(arguments.get("path"))
+        if name in ("move_path", "copy_path"):
+            return (
+                self._path_is_in_workspace(arguments.get("source"))
+                or self._path_is_in_workspace(arguments.get("destination"))
+            )
         if name == "powershell":
             return (
                 self._path_is_in_workspace(arguments.get("cwd") or ".")
@@ -694,6 +701,16 @@ class Agent:
         if tool_name == "write_file":
             target = str(arguments.get("file_path") or "").strip()
             return f"before write_file {target}"[:200]
+        if tool_name == "patch_file":
+            target = str(arguments.get("file_path") or "").strip()
+            return f"before patch_file {target}"[:200]
+        if tool_name in ("delete_path", "make_directory"):
+            target = str(arguments.get("path") or "").strip()
+            return f"before {tool_name} {target}"[:200]
+        if tool_name in ("move_path", "copy_path"):
+            source = str(arguments.get("source") or "").strip()
+            destination = str(arguments.get("destination") or "").strip()
+            return f"before {tool_name} {source} -> {destination}"[:200]
         if tool_name == "powershell":
             command = " ".join(str(arguments.get("command") or "").split())
             return f"before powershell {command}"[:200]
