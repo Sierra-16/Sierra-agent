@@ -90,6 +90,55 @@ class ToolWorkspacePathTests(unittest.TestCase):
         self.assertTrue(result["has_more"])
         self.assertEqual(result["next_offset"], 2)
 
+    def test_search_files_supports_content_search_with_context(self):
+        os.makedirs(os.path.join(self.workspace, "pkg"))
+        with open(os.path.join(self.workspace, "pkg", "agent.py"), "w", encoding="utf-8") as f:
+            f.write("before\nclass Agent:\n    pass\nafter\n")
+        with open(os.path.join(self.workspace, "config.json"), "w", encoding="utf-8") as f:
+            f.write('{"secret": "class Agent"}')
+
+        result = json.loads(
+            search_files(
+                "class Agent",
+                target="content",
+                path=".",
+                file_glob="*.py",
+                context=1,
+            )
+        )
+
+        self.assertEqual(result["target"], "content")
+        self.assertEqual(result["total"], 1)
+        match = result["matches"][0]
+        self.assertEqual(match["path"], "pkg/agent.py")
+        self.assertEqual(match["line_number"], 2)
+        self.assertEqual(match["before"][0]["line"], "before")
+        self.assertEqual(match["after"][0]["line"], "    pass")
+        self.assertNotIn("secret", json.dumps(result, ensure_ascii=False))
+
+    def test_search_files_content_files_only_and_count_modes(self):
+        with open(os.path.join(self.workspace, "a.py"), "w", encoding="utf-8") as f:
+            f.write("needle\nneedle\n")
+        with open(os.path.join(self.workspace, "b.py"), "w", encoding="utf-8") as f:
+            f.write("needle\n")
+
+        files_only = json.loads(
+            search_files("needle", target="content", output_mode="files_only")
+        )
+        counts = json.loads(
+            search_files("needle", target="content", output_mode="count")
+        )
+
+        self.assertEqual(files_only["total"], 2)
+        self.assertEqual(
+            {os.path.basename(path) for path in files_only["matches"]},
+            {"a.py", "b.py"},
+        )
+        self.assertEqual(
+            {os.path.basename(item["file_path"]): item["count"] for item in counts["matches"]},
+            {"a.py": 2, "b.py": 1},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

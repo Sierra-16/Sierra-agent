@@ -112,12 +112,16 @@ class Agent:
         context_config=None,
         cron_config=None,
         checkpoint_config=None,
+        tools_config=None,
         workspace=None,
         sierra_dir=None,
     ):
         self.llm = LLMClient(base_url, api_key, model=model, max_tokens=max_tokens, temperature=temperature)
         self.model = model
         self.tools = registry
+        configure_tool_search = getattr(self.tools, "configure_tool_search", None)
+        if callable(configure_tool_search):
+            configure_tool_search(tools_config or {}, context_window=context_window)
         self.safety = SafetyGate()
         self.permission_policy = PermissionPolicy(permission_config)
         self.background_jobs = BackgroundJobQueue.from_config(background_config)

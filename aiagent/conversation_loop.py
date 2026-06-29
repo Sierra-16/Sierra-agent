@@ -198,6 +198,30 @@ def run_conversation_loop(
         if name == "request_user_input":
             return _request_user_input(tc, args)
 
+        unwrap_invocation = getattr(agent.tools, "unwrap_invocation", None)
+        if callable(unwrap_invocation):
+            real_name, real_args, unwrap_error = unwrap_invocation(name, args)
+            if unwrap_error:
+                result = {
+                    "error": unwrap_error,
+                    "tool": name,
+                    "requested_tool": real_name,
+                }
+                _write_audit({
+                    "tool": name,
+                    "policy_action": "deny",
+                    "decision": "deny",
+                    "approved": False,
+                    "executed": False,
+                    "success": False,
+                    "duration_ms": 0,
+                    "arguments": sanitize_arguments(args),
+                    "error": unwrap_error,
+                })
+                return tc["id"], name, json.dumps(result, ensure_ascii=False)
+            name = real_name
+            args = real_args
+
         safe_arguments = sanitize_arguments(args)
         risk = agent.safety.assess(name, args)
         decision = agent.permission_policy.decide(name, risk.level)

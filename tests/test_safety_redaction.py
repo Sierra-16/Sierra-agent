@@ -20,6 +20,8 @@ class SafetyRedactionTests(unittest.TestCase):
         self.assertEqual(gate.assess("session_load", {"session_id": "abc"}).level, "low")
         self.assertEqual(gate.assess("git_inspect", {"action": "status"}).level, "low")
         self.assertEqual(gate.assess("project_inspect", {"path": "."}).level, "low")
+        self.assertEqual(gate.assess("tool_search", {"query": "github"}).level, "low")
+        self.assertEqual(gate.assess("tool_describe", {"name": "mcp__github__create_issue"}).level, "low")
         self.assertEqual(gate.assess("mcp__docs__search", {"query": "Sierra"}).level, "low")
         self.assertEqual(gate.assess("skill_run_script").level, "high")
         self.assertEqual(gate.assess("skill_manage").level, "high")

@@ -19,6 +19,8 @@
       "session_load",
       "git_inspect",
       "project_inspect",
+      "tool_search",
+      "tool_describe",
       "skills_list",
       "skill_view",
       "skill_render_template",
@@ -56,6 +58,14 @@
       "mcp__*"
     ],
     "deny": []
+  },
+  "tools": {
+    "tool_search": {
+      "enabled": "auto",
+      "threshold_pct": 10,
+      "search_default_limit": 5,
+      "max_search_limit": 20
+    }
   },
   "audit": {
     "enabled": true,

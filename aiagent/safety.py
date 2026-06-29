@@ -28,6 +28,8 @@ LOW_RISK_TOOLS = {
     "session_load",
     "git_inspect",
     "project_inspect",
+    "tool_search",
+    "tool_describe",
     "skills_list",
     "skill_view",
     "skill_render_template",
