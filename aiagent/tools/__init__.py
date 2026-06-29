@@ -13,6 +13,7 @@ from . import browser_tool
 from . import memory_tool
 from . import session_tool
 from . import git_tool
+from . import project_tool
 from . import skill_view_tool
 from . import powershell_tool
 from . import terminal_tool

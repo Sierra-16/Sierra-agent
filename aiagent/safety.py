@@ -27,6 +27,7 @@ LOW_RISK_TOOLS = {
     "session_search",
     "session_load",
     "git_inspect",
+    "project_inspect",
     "skills_list",
     "skill_view",
     "skill_render_template",
