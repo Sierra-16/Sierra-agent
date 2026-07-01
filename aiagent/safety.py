@@ -11,6 +11,7 @@ LOW_RISK_TOOLS = {
     "calculator",
     "get_time",
     "list_directory",
+    "read_document",
     "read_file",
     "search_files",
     "web_fetch",
@@ -170,7 +171,7 @@ class SafetyGate:
                 return ToolRisk("high", "该工具会在浏览器页面中执行 JavaScript")
             return ToolRisk("low", "只读取浏览器控制台消息")
 
-        if normalized == "read_file" and self._reads_sensitive_path(arguments):
+        if normalized in {"read_file", "read_document"} and self._reads_sensitive_path(arguments):
             return ToolRisk("high", "读取目标可能包含密钥、配置或凭证")
 
         if normalized in HIGH_RISK_TOOLS:

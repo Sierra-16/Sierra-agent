@@ -131,6 +131,7 @@ def run_conversation_loop(
     on_tool_approval=None,
     on_user_input=None,
 ):
+    stream_to_stdout = on_status is None
     turn_start_index = len(agent.messages)
     checkpoint_manager = getattr(agent, "checkpoints", None)
     if checkpoint_manager is not None:
@@ -165,7 +166,8 @@ def run_conversation_loop(
     def on_delta(event):
         if event["type"] == "reasoning":
             if not on_delta.state["in_reasoning"]:
-                print("\n🧠 思考中")
+                if stream_to_stdout:
+                    print("\n🧠 思考中")
                 on_delta.state["in_reasoning"] = True
                 if on_status:
                     on_status({"type": "thinking"})
@@ -174,11 +176,13 @@ def run_conversation_loop(
             if on_status:
                 on_status({"type": "assistant_delta", "text": event["text"]})
             if on_delta.state["in_reasoning"]:
-                print("\n")
+                if stream_to_stdout:
+                    print("\n")
                 on_delta.state["in_reasoning"] = False
-            for char in event["text"]:
-                print(char, end="", flush=True)
-                time.sleep(0.025)
+            if stream_to_stdout:
+                for char in event["text"]:
+                    print(char, end="", flush=True)
+                    time.sleep(0.025)
 
         elif event["type"] == "tool_start":
             if on_status:
@@ -188,7 +192,8 @@ def run_conversation_loop(
                     })
             if on_delta.state["in_reasoning"]:
                 on_delta.state["in_reasoning"] = False
-            print(f"\n🔧 调用工具: {event['name']}")
+            if stream_to_stdout:
+                print(f"\n🔧 调用工具: {event['name']}")
             if on_status:
                 on_status({"type": "tool", "name": event["name"]})
 

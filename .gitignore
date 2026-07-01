@@ -19,12 +19,17 @@ htmlcov/
 # Node dependencies and generated output
 node_modules/
 tui/node_modules/
+web/.npm-cache/
 dist/
 build/
 !tui/packages/sierra-ink/dist/
 !tui/packages/sierra-ink/dist/entry-exports.js
 
 # Runtime data
+output/
+.playwright-cli/
+.playwright-mcp/
+uploads/
 conversations/
 logs/
 checkpoints/

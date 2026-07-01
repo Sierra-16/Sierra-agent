@@ -12,6 +12,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
 
+from .document_extract import extract_document_file, is_supported_document_path
+
 
 _QUOTED_REFERENCE_VALUE = r'(?:`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\')'
 REFERENCE_PATTERN = re.compile(
@@ -173,6 +175,8 @@ def _expand_file_reference(ref: ContextReference, workspace: Path) -> tuple[str 
     if not path.is_file():
         return f"{ref.raw}: file not found", None
     if _is_binary_file(path):
+        if is_supported_document_path(path):
+            return _expand_document_file_reference(ref, path)
         return None, _reference_block(
             ref,
             f"File: {path}\nBinary or non-text file; content not attached.",
@@ -195,6 +199,39 @@ def _expand_file_reference(ref: ContextReference, workspace: Path) -> tuple[str 
         header += f"Content truncated to {FILE_MAX_CHARS} chars.\n"
     language = _code_fence_language(path)
     return None, _reference_block(ref, header + "\n" + text, language=language)
+
+
+def _expand_document_file_reference(ref: ContextReference, path: Path) -> tuple[str | None, str | None]:
+    result = extract_document_file(
+        path,
+        max_chars=FILE_MAX_CHARS,
+        max_pages=30,
+        include_metadata=False,
+    )
+    if result.get("error"):
+        return f"{ref.raw}: {result['error']}", None
+    text = str(result.get("text") or "").strip()
+    if not text:
+        return f"{ref.raw}: no text extracted from document", None
+
+    original_lines = text.splitlines()
+    header = (
+        f"Document: {path}\n"
+        f"Kind: {result.get('kind', path.suffix.lower().lstrip('.'))}\n"
+        f"Parser: {result.get('parser', 'document_extract')}\n"
+    )
+    if ref.line_start is not None:
+        start = max(1, ref.line_start)
+        end = ref.line_end or start
+        selected = original_lines[start - 1:end]
+        text = "\n".join(selected)
+        header += f"Extracted text lines: {start}-{end}\n"
+    if result.get("truncated"):
+        header += f"Content truncated to {FILE_MAX_CHARS} chars.\n"
+    warnings = result.get("warnings")
+    if isinstance(warnings, list) and warnings:
+        header += "Warnings:\n" + "\n".join(f"- {warning}" for warning in warnings[:5]) + "\n"
+    return None, _reference_block(ref, header + "\n" + text, language="text")
 
 
 def _expand_folder_reference(ref: ContextReference, workspace: Path) -> tuple[str | None, str | None]:

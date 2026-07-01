@@ -2,3 +2,6 @@ openai
 PyYAML
 playwright
 pypdf
+fastapi
+uvicorn
+httpx

@@ -2,6 +2,7 @@ from .registry import registry, ToolRegistry, ToolEntry
 from . import calculator_tool
 from . import time_tool
 from . import read_file_tool
+from . import document_tool
 from . import write_file_tool
 from . import list_directory_tool
 from . import search_file_tool
