@@ -64,6 +64,8 @@
         class="process-panel"
         :class="processClasses"
       >
+        <SierraOrnaments variant="process" :active="activeActivity.status === 'active'" />
+
         <div class="process-portrait">
           <span
             class="thinking-sprite hero"
@@ -75,13 +77,13 @@
         <div class="process-main">
           <div class="process-kicker">
             <component :is="activeActivityIcon" :size="14" />
-            <span>Sierra 过程</span>
+            <span>状态</span>
           </div>
           <div class="process-title-row">
             <h4>{{ processTitle }}</h4>
             <code v-if="activeActivity.toolName">{{ activeActivity.toolName }}</code>
           </div>
-          <p>{{ processDetail }}</p>
+          <p v-if="processDetail">{{ processDetail }}</p>
 
           <div class="process-phases" aria-label="Sierra 当前处理阶段">
             <span
@@ -310,6 +312,7 @@ import {
 } from "lucide-vue-next";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import type { ChatActivityEvent, ChatMessage } from "../types";
+import SierraOrnaments from "./SierraOrnaments.vue";
 
 type CompletionMode = "slash" | "reference";
 
@@ -411,38 +414,41 @@ const processClasses = computed(() => {
 const processTitle = computed(() => {
   const event = activeActivity.value;
   if (!event) {
-    return "Sierra 正在整理";
+    return "处理中";
   }
   if (event.status === "error") {
-    return "处理遇到问题";
+    return "处理异常";
   }
   if (event.type === "approval") {
-    return "需要你确认工具操作";
+    return "等待确认";
   }
   if (event.type === "user-input") {
-    return "Sierra 想先问清楚";
+    return "等待输入";
   }
   if (event.type === "tool") {
-    return event.status === "done" ? "工具结果已返回" : "正在调用工具";
+    return event.status === "done" ? "工具完成" : "调用工具";
   }
   if (event.type === "memory") {
-    return "正在整理记忆";
+    return "整理记忆";
   }
   if (event.type === "history") {
-    return "正在检索会话";
+    return "检索会话";
   }
   if (event.type === "context" || event.type === "reference") {
-    return "正在装配上下文";
+    return "整理上下文";
   }
   if (event.type === "thinking") {
-    return event.status === "done" ? "Sierra 想明白了" : "Sierra 正在思考";
+    return event.status === "done" ? "完成" : "思考中";
   }
-  return event.label || "Sierra 正在处理";
+  return event.label || "处理中";
 });
 const processDetail = computed(() => {
   const event = activeActivity.value;
   if (!event) {
-    return "她正在把线索排好队，别催，催也会继续做。";
+    return "";
+  }
+  if (event.type === "thinking") {
+    return "";
   }
   if (event.reason) {
     return event.reason;
@@ -451,15 +457,15 @@ const processDetail = computed(() => {
     return event.detail;
   }
   if (event.toolName) {
-    return `调用 ${event.toolName}，等结果回来再继续。`;
+    return "";
   }
   if (event.type === "approval") {
-    return "这个动作有风险，需要你在下面选择允许或拒绝。";
+    return "请在下方选择允许或拒绝。";
   }
   if (event.type === "user-input") {
-    return "她需要一点额外信息，免得擅自猜错。";
+    return "请补充信息后继续。";
   }
-  return "叶冠上的问号还在转，Sierra 正在把思路捋顺。";
+  return "";
 });
 const processStatusText = computed(() => {
   const status = activeActivity.value?.status;

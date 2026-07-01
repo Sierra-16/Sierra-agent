@@ -8,6 +8,7 @@
     </div>
 
     <button class="primary-action" type="button" @click="$emit('new-chat')">
+      <SierraOrnaments variant="button" compact />
       <Plus :size="16" />
       新会话
     </button>
@@ -50,6 +51,7 @@
 
     <section class="sidebar-footer">
       <button class="settings-line" type="button" @click="$emit('open-settings')">
+        <SierraOrnaments variant="button" compact />
         <Settings2 :size="17" />
         <span>
           <strong>设置</strong>
@@ -64,6 +66,7 @@
 import { MessageCircle, Plus, Settings2 } from "lucide-vue-next";
 import type { DashboardPayload, NavItem, SessionSummary, ViewId } from "../types";
 import { formatTimestamp } from "../types";
+import SierraOrnaments from "./SierraOrnaments.vue";
 
 defineProps<{
   activeSessionId: string;
