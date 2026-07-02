@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import contextlib
-import io
 import json
 import os
 import queue
@@ -20,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config_validation import StartupConfigError, format_config_issues, validate_model_config
+from .gateway import GatewayRuntime, sanitize_gateway_event
 from .safety import sanitize_text
 from .tools.registry import BRIDGE_TOOL_NAMES
 
@@ -37,7 +36,7 @@ class UserInputResponseRequest(BaseModel):
     id: str = Field(min_length=1, max_length=120)
     value: str = Field(default="", max_length=12000)
     label: str = Field(default="", max_length=1000)
-    free_text: str = Field(default="", max_length=12000)
+    free_text: bool = False
     cancelled: bool = False
 
 
@@ -57,6 +56,28 @@ class CommandRequest(BaseModel):
 class UploadRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=260)
     content_base64: str = Field(min_length=1, max_length=40_000_000)
+
+
+class ModelConfigRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=200)
+    base_url: str = Field(min_length=1, max_length=800)
+    api_key: str = Field(default="", max_length=4000)
+    max_tokens: int = Field(default=4096, ge=1, le=2_000_000)
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    context_window: int = Field(default=256_000, ge=1, le=10_000_000)
+
+
+class MCPServerConfigRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    type: str = Field(default="stdio", max_length=40)
+    command: str = Field(default="", max_length=1000)
+    args: list[str] = Field(default_factory=list)
+    url: str = Field(default="", max_length=2000)
+    headers: dict[str, str] = Field(default_factory=dict)
+    cwd: str = Field(default="", max_length=1000)
+    env: dict[str, str] = Field(default_factory=dict)
+    enabled: bool = True
 
 
 def create_dashboard_app(
@@ -80,11 +101,18 @@ def create_dashboard_app(
     app.state.config_path = Path(config_path).resolve() if config_path else None
     app.state.make_agent = make_agent
     app.state.sierra_dir = root_dir
-    app.state.chat_lock = threading.Lock()
-    app.state.approval_lock = threading.Lock()
-    app.state.pending_approvals = {}
-    app.state.input_lock = threading.Lock()
-    app.state.pending_inputs = {}
+    app.state.gateway = GatewayRuntime(
+        agent,
+        config=app.state.config,
+        config_path=app.state.config_path,
+        make_agent=make_agent,
+        id_factory=lambda: uuid.uuid4().hex,
+    )
+    app.state.chat_lock = app.state.gateway.chat_lock
+    app.state.approval_lock = app.state.gateway.approval_lock
+    app.state.pending_approvals = app.state.gateway.pending_approvals
+    app.state.input_lock = app.state.gateway.input_lock
+    app.state.pending_inputs = app.state.gateway.pending_inputs
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -97,57 +125,78 @@ def create_dashboard_app(
     @app.get("/api/dashboard")
     def dashboard() -> dict[str, Any]:
         return build_dashboard_payload(
-            app.state.agent,
+            app.state.gateway.agent,
             config=app.state.config,
             sierra_dir=app.state.sierra_dir,
         )
+
+    @app.get("/api/config/models")
+    def config_models() -> dict[str, Any]:
+        config = app.state.config if isinstance(app.state.config, dict) else {}
+        return {
+            "ok": True,
+            "active": str(config.get("active_model") or ""),
+            "models": _models_from_config(config, include_details=True),
+        }
+
+    @app.post("/api/config/models")
+    def save_model_config(request: ModelConfigRequest) -> dict[str, Any]:
+        with app.state.chat_lock:
+            return _save_model_config(app, request)
+
+    @app.delete("/api/config/models/{model_key}")
+    def delete_model_config(model_key: str) -> dict[str, Any]:
+        with app.state.chat_lock:
+            return _delete_model_config(app, model_key)
+
+    @app.get("/api/config/mcp")
+    def config_mcp() -> dict[str, Any]:
+        config = app.state.config if isinstance(app.state.config, dict) else {}
+        return {
+            "ok": True,
+            "servers": _safe_mcp_servers(config),
+            "status": _mcp(app.state.gateway.agent),
+        }
+
+    @app.post("/api/config/mcp")
+    def save_mcp_config(request: MCPServerConfigRequest) -> dict[str, Any]:
+        with app.state.chat_lock:
+            return _save_mcp_config(app, request)
+
+    @app.delete("/api/config/mcp/{server_name}")
+    def delete_mcp_config(server_name: str) -> dict[str, Any]:
+        with app.state.chat_lock:
+            return _delete_mcp_config(app, server_name)
+
+    @app.post("/api/skills/reload")
+    def reload_skills_endpoint() -> dict[str, Any]:
+        with app.state.chat_lock:
+            result = _safe_call(app.state.gateway.agent, "reload_skills", default={})
+            if not isinstance(result, dict):
+                result = {}
+            return {
+                "ok": bool(result.get("ok", True)),
+                "count": result.get("count", len(result.get("skills", []) or [])),
+                "skills": result.get("skills", []),
+                "errors": result.get("errors", []),
+                "text": f"技能已重新加载，共 {result.get('count', len(result.get('skills', []) or []))} 个。",
+            }
 
     @app.post("/api/chat")
     def chat(request: ChatRequest) -> dict[str, Any]:
         message = sanitize_text(request.message.strip(), max_length=12000)
         events: list[dict[str, Any]] = []
-
-        def on_status(event: dict[str, Any]) -> None:
-            safe_event = _sanitize_status_event(event)
-            if safe_event:
-                events.append(safe_event)
-
-        def on_tool_approval(approval_request: dict[str, Any]) -> str:
-            events.append({
-                "type": "tool_denied_by_web",
-                "name": approval_request.get("name", "tool"),
-                "risk": approval_request.get("risk", "unknown"),
-            })
-            return "deny"
-
-        def on_user_input(input_request: dict[str, Any]) -> dict[str, Any]:
-            events.append({
-                "type": "user_input_cancelled_by_web",
-                "question": input_request.get("question", ""),
-            })
-            return {"cancelled": True}
-
-        # Web chat owns the response stream. Keep any legacy CLI prints or
-        # third-party stdout noise from leaking into the terminal that hosts
-        # the dashboard server.
-        output_sink = io.StringIO()
-        with (
-            app.state.chat_lock,
-            contextlib.redirect_stdout(output_sink),
-            contextlib.redirect_stderr(output_sink),
-        ):
-            answer = app.state.agent.chat(
-                message,
-                on_status=on_status,
-                on_tool_approval=on_tool_approval,
-                on_user_input=on_user_input,
-            )
-            usage = app.state.agent.usage_snapshot()
+        result = app.state.gateway.chat(
+            message,
+            emit=events.append,
+            interaction="deny",
+            suppress_output=True,
+        )
 
         return {
-            "answer": sanitize_text(str(answer or ""), max_length=24000),
+            "answer": result.answer,
             "events": events[-80:],
-            "usage": _usage(usage if isinstance(usage, dict) else {}),
+            "usage": _usage(result.usage),
         }
 
     @app.post("/api/chat/stream")
@@ -158,87 +207,26 @@ def create_dashboard_app(
         def emit(event: dict[str, Any]) -> None:
             event_queue.put(event)
 
-        def on_status(event: dict[str, Any]) -> None:
-            safe_event = _sanitize_status_event(event)
-            if safe_event:
-                emit(safe_event)
-
-        def on_tool_approval(approval_request: dict[str, Any]) -> str:
-            approval_id = f"approval-{uuid.uuid4().hex[:12]}"
-            waiter = {
-                "event": threading.Event(),
-                "decision": "deny",
-            }
-            with app.state.approval_lock:
-                app.state.pending_approvals[approval_id] = waiter
-            emit({
-                "type": "tool_approval_request",
-                "id": approval_id,
-                "name": sanitize_text(str(approval_request.get("name", "tool")), max_length=120),
-                "risk": sanitize_text(str(approval_request.get("risk", "unknown")), max_length=80),
-                "reason": sanitize_text(str(approval_request.get("reason", "")), max_length=1000),
-                "arguments": approval_request.get("arguments", {}),
-            })
-            approved = waiter["event"].wait(timeout=300)
-            decision = str(waiter.get("decision") or "deny") if approved else "deny"
-            with app.state.approval_lock:
-                app.state.pending_approvals.pop(approval_id, None)
-            emit({
-                "type": "tool_approval_result",
-                "id": approval_id,
-                "decision": decision,
-                "approved": decision in {"once", "session"},
-                "timed_out": not approved,
-            })
-            return decision
-
-        def on_user_input(input_request: dict[str, Any]) -> dict[str, Any]:
-            input_id = f"input-{uuid.uuid4().hex[:12]}"
-            waiter = {
-                "event": threading.Event(),
-                "response": {"cancelled": True},
-            }
-            with app.state.input_lock:
-                app.state.pending_inputs[input_id] = waiter
-            emit({
-                "type": "user_input_request",
-                "id": input_id,
-                "question": sanitize_text(str(input_request.get("question", "")), max_length=1000),
-                "options": _safe_options(input_request.get("options")),
-                "allow_free_text": bool(input_request.get("allow_free_text", True)),
-            })
-            answered = waiter["event"].wait(timeout=600)
-            response = dict(waiter.get("response") or {"cancelled": True}) if answered else {"cancelled": True}
-            with app.state.input_lock:
-                app.state.pending_inputs.pop(input_id, None)
-            emit({
-                "type": "user_input_result",
-                "id": input_id,
-                "cancelled": bool(response.get("cancelled")),
-                "label": sanitize_text(str(response.get("label", "")), max_length=300),
-            })
-            return response
-
         def worker() -> None:
-            output_sink = io.StringIO()
             try:
-                with (
-                    app.state.chat_lock,
-                    contextlib.redirect_stdout(output_sink),
-                    contextlib.redirect_stderr(output_sink),
-                ):
-                    answer = app.state.agent.chat(
-                        message,
-                        on_status=on_status,
-                        on_tool_approval=on_tool_approval,
-                        on_user_input=on_user_input,
-                    )
-                    usage = app.state.agent.usage_snapshot()
-                emit({
-                    "type": "done",
-                    "answer": sanitize_text(str(answer or ""), max_length=24000),
-                    "usage": _usage(usage if isinstance(usage, dict) else {}),
-                })
+                result = app.state.gateway.chat(
+                    message,
+                    emit=emit,
+                    interaction="interactive",
+                    suppress_output=True,
+                )
+                if result.interrupted:
+                    emit({
+                        "type": "interrupted",
+                        "text": "已中断当前处理。",
+                        "usage": _usage(result.usage),
+                    })
+                else:
+                    emit({
+                        "type": "done",
+                        "answer": result.answer,
+                        "usage": _usage(result.usage),
+                    })
             except Exception as exc:
                 emit({
                     "type": "error",
@@ -260,50 +248,31 @@ def create_dashboard_app(
 
     @app.post("/api/chat/approval")
     def chat_approval(request: ToolApprovalRequest) -> dict[str, Any]:
-        approval_id = sanitize_text(request.id.strip(), max_length=120)
-        decision = sanitize_text(request.decision.strip().lower(), max_length=20)
-        if decision in {"allow", "approve", "run", "yes", "true"}:
-            decision = "once"
-        elif decision in {"reject", "no", "false"}:
-            decision = "deny"
-        if decision not in {"once", "session", "deny"}:
-            return {"ok": False, "error": "invalid decision"}
-
-        with app.state.approval_lock:
-            waiter = app.state.pending_approvals.get(approval_id)
-            if not waiter:
-                return {"ok": False, "error": "approval request not found"}
-            waiter["decision"] = decision
-            waiter["event"].set()
-        return {"ok": True, "id": approval_id, "decision": decision}
+        return app.state.gateway.respond_tool_approval(request.id, request.decision)
 
     @app.post("/api/chat/input")
     def chat_input(request: UserInputResponseRequest) -> dict[str, Any]:
-        input_id = sanitize_text(request.id.strip(), max_length=120)
-        response = {
-            "value": sanitize_text(request.value, max_length=12000),
-            "label": sanitize_text(request.label, max_length=1000),
-            "free_text": sanitize_text(request.free_text, max_length=12000),
-            "cancelled": bool(request.cancelled),
-        }
-        with app.state.input_lock:
-            waiter = app.state.pending_inputs.get(input_id)
-            if not waiter:
-                return {"ok": False, "error": "input request not found"}
-            waiter["response"] = response
-            waiter["event"].set()
-        return {"ok": True, "id": input_id}
+        return app.state.gateway.respond_user_input(request.id, {
+            "value": request.value,
+            "label": request.label,
+            "free_text": bool(request.free_text),
+            "cancelled": request.cancelled,
+        })
+
+    @app.post("/api/chat/cancel")
+    def chat_cancel() -> dict[str, Any]:
+        return app.state.gateway.cancel_current("web")
 
     @app.post("/api/command")
     def command(request: CommandRequest) -> dict[str, Any]:
         with app.state.chat_lock:
-            return _execute_dashboard_command(app, request)
+            return _repair_payload_text(_execute_dashboard_command(app, request))
 
     @app.get("/api/context/suggestions")
     def context_suggestions(q: str = "", limit: int = 24) -> dict[str, Any]:
         query = sanitize_text(str(q or "").strip(), max_length=240)
         safe_limit = max(1, min(_int(limit, 24), 60))
-        workspace = Path(getattr(app.state.agent, "workspace", "") or app.state.sierra_dir).resolve()
+        workspace = Path(getattr(app.state.gateway.agent, "workspace", "") or app.state.sierra_dir).resolve()
         if not workspace.exists() or not workspace.is_dir():
             workspace = app.state.sierra_dir
         return {
@@ -313,7 +282,7 @@ def create_dashboard_app(
 
     @app.post("/api/uploads")
     def upload_file(request: UploadRequest) -> dict[str, Any]:
-        workspace = Path(getattr(app.state.agent, "workspace", "") or app.state.sierra_dir).resolve()
+        workspace = Path(getattr(app.state.gateway.agent, "workspace", "") or app.state.sierra_dir).resolve()
         if not workspace.exists() or not workspace.is_dir():
             workspace = app.state.sierra_dir
         uploads_dir = (workspace / "uploads").resolve()
@@ -349,9 +318,9 @@ def create_dashboard_app(
         if not conversation_id:
             return {"id": "", "messages": []}
         with app.state.chat_lock:
-            app.state.agent.load_conversation(conversation_id)
-            usage = app.state.agent.usage_snapshot()
-            messages = _web_messages(getattr(app.state.agent, "messages", []))
+            app.state.gateway.agent.load_conversation(conversation_id)
+            usage = app.state.gateway.agent.usage_snapshot()
+            messages = _web_messages(getattr(app.state.gateway.agent, "messages", []))
         return {
             "id": conversation_id,
             "messages": messages,
@@ -361,11 +330,11 @@ def create_dashboard_app(
     @app.post("/api/conversations/new")
     def new_conversation() -> dict[str, Any]:
         with app.state.chat_lock:
-            if hasattr(app.state.agent, "checkpoint_conversation"):
-                app.state.agent.checkpoint_conversation()
-            app.state.agent.reset()
-            app.state.agent.conv_id = None
-            usage = app.state.agent.usage_snapshot()
+            if hasattr(app.state.gateway.agent, "checkpoint_conversation"):
+                app.state.gateway.agent.checkpoint_conversation()
+            app.state.gateway.agent.reset()
+            app.state.gateway.agent.conv_id = None
+            usage = app.state.gateway.agent.usage_snapshot()
         return {
             "id": None,
             "messages": [],
@@ -414,15 +383,7 @@ def _index_response(index_file: Path) -> FileResponse:
 
 
 def _sanitize_status_event(event: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(event, dict):
-        return {}
-    safe_event: dict[str, Any] = {}
-    for key, value in event.items():
-        if isinstance(value, str):
-            safe_event[key] = sanitize_text(value, max_length=600)
-        else:
-            safe_event[key] = value
-    return safe_event
+    return sanitize_gateway_event(event)
 
 
 def _safe_options(value: Any) -> list[dict[str, str]]:
@@ -744,7 +705,7 @@ def _ok(event_type: str, text: str, **extra: Any) -> dict[str, Any]:
     return {
         "ok": bool(extra.pop("success", True)),
         "type": event_type,
-        "text": sanitize_text(str(text or ""), max_length=24000),
+        "text": sanitize_text(_repair_mojibake(str(text or "")), max_length=24000),
         **extra,
     }
 
@@ -853,6 +814,9 @@ def _switch_model(app: FastAPI, model_key: str) -> dict[str, Any]:
     except Exception:
         pass
     app.state.agent = new_agent
+    gateway = getattr(app.state, "gateway", None)
+    if gateway is not None:
+        gateway.set_agent(new_agent)
     model_name = getattr(getattr(new_agent, "llm", None), "model", None) or getattr(new_agent, "model", "")
     return {
         "ok": True,
@@ -863,6 +827,368 @@ def _switch_model(app: FastAPI, model_key: str) -> dict[str, Any]:
         "usage": _usage(_usage_snapshot(new_agent)),
         "messages": _web_messages(getattr(new_agent, "messages", [])),
     }
+
+
+def _models_from_config(config: dict[str, Any], *, include_details: bool = False) -> list[dict[str, Any]]:
+    active = str(config.get("active_model") or "")
+    models = []
+    for key, value in (config.get("models") or {}).items():
+        if not isinstance(value, dict):
+            continue
+        item = {
+            "key": key,
+            "name": value.get("name", key),
+            "active": key == active,
+        }
+        if include_details:
+            item.update({
+                "base_url": value.get("base_url", ""),
+                "max_tokens": _int(value.get("max_tokens"), 4096),
+                "temperature": float(value.get("temperature", 0.7) or 0.7),
+                "context_window": _int(value.get("context_window"), 256000),
+                "api_key_set": bool(str(value.get("api_key") or "").strip()),
+                "api_key_preview": _secret_preview(value.get("api_key", "")),
+            })
+        models.append(item)
+    return models
+
+
+def _switch_model(app: FastAPI, model_key: str) -> dict[str, Any]:
+    model_key = sanitize_text(model_key.strip(), max_length=200)
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    if not model_key:
+        return _ok("models", "请选择要切换的模型。", success=False, models=_models_from_config(config))
+    if not config:
+        return _ok("model_changed", "Web 后端没有模型切换配置。", success=False)
+    if model_key not in (config.get("models") or {}):
+        return _ok("model_changed", f"未知模型: {model_key}", success=False)
+    try:
+        validate_model_config(config, model_key)
+    except StartupConfigError as exc:
+        return _ok("model_changed", format_config_issues(exc.issues), success=False)
+
+    config["active_model"] = model_key
+    _write_dashboard_config(app)
+    result = _rebuild_agent(app, model_key)
+    if not result.get("ok"):
+        return result
+    return {
+        **result,
+        "type": "model_changed",
+        "key": model_key,
+        "text": f"已切换模型: {model_key}",
+    }
+
+
+def _save_model_config(app: FastAPI, request: ModelConfigRequest) -> dict[str, Any]:
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    models = config.setdefault("models", {})
+    if not isinstance(models, dict):
+        config["models"] = {}
+        models = config["models"]
+
+    model_key = _safe_config_key(request.key)
+    if not model_key:
+        return {"ok": False, "text": "模型 key 只能包含字母、数字、下划线、短横线和点。"}
+
+    existing = models.get(model_key, {}) if isinstance(models.get(model_key), dict) else {}
+    api_key = request.api_key.strip()
+    if not api_key and existing.get("api_key"):
+        api_key = str(existing.get("api_key") or "")
+
+    models[model_key] = {
+        "name": request.name.strip(),
+        "base_url": request.base_url.strip().rstrip("/"),
+        "api_key": api_key,
+        "max_tokens": int(request.max_tokens),
+        "temperature": float(request.temperature),
+        "context_window": int(request.context_window),
+    }
+    if not config.get("active_model"):
+        config["active_model"] = model_key
+
+    try:
+        validate_model_config(config, str(config.get("active_model") or model_key))
+    except StartupConfigError as exc:
+        return {
+            "ok": False,
+            "text": format_config_issues(exc.issues),
+            "models": _models_from_config(config, include_details=True),
+        }
+
+    _write_dashboard_config(app)
+    reloaded = False
+    if model_key == str(config.get("active_model") or ""):
+        rebuilt = _rebuild_agent(app, model_key)
+        if not rebuilt.get("ok"):
+            return rebuilt
+        reloaded = True
+
+    return {
+        "ok": True,
+        "type": "model_saved",
+        "text": f"模型配置已保存: {model_key}" + ("，当前 Agent 已热重载。" if reloaded else "。"),
+        "active": str(config.get("active_model") or ""),
+        "models": _models_from_config(config, include_details=True),
+    }
+
+
+def _delete_model_config(app: FastAPI, model_key: str) -> dict[str, Any]:
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    models = config.get("models") if isinstance(config.get("models"), dict) else {}
+    model_key = _safe_config_key(model_key)
+    if not model_key or model_key not in models:
+        return {"ok": False, "text": f"未知模型: {model_key or '(empty)'}"}
+    if model_key == str(config.get("active_model") or ""):
+        return {"ok": False, "text": "不能删除当前正在使用的模型。请先切换到其他模型。"}
+    if len(models) <= 1:
+        return {"ok": False, "text": "至少需要保留一个模型。"}
+    del models[model_key]
+    _write_dashboard_config(app)
+    return {
+        "ok": True,
+        "type": "model_deleted",
+        "text": f"模型配置已删除: {model_key}",
+        "active": str(config.get("active_model") or ""),
+        "models": _models_from_config(config, include_details=True),
+    }
+
+
+def _save_mcp_config(app: FastAPI, request: MCPServerConfigRequest) -> dict[str, Any]:
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    servers = config.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        config["mcpServers"] = {}
+        servers = config["mcpServers"]
+
+    name = _safe_config_key(request.name)
+    if not name:
+        return {"ok": False, "text": "MCP 名称只能包含字母、数字、下划线、短横线和点。"}
+
+    transport = _normalize_web_mcp_transport(request.type)
+    existing = servers.get(name, {}) if isinstance(servers.get(name), dict) else {}
+    next_server: dict[str, Any] = {"type": transport, "enabled": bool(request.enabled)}
+    if transport == "streamablehttp":
+        if not request.url.strip():
+            return {"ok": False, "text": "streamablehttp MCP 需要填写 URL。"}
+        next_server["url"] = request.url.strip()
+        headers = _merge_secret_dict(existing.get("headers"), request.headers)
+        if headers:
+            next_server["headers"] = headers
+    else:
+        if not request.command.strip():
+            return {"ok": False, "text": "stdio MCP 需要填写 command。"}
+        next_server["command"] = request.command.strip()
+        next_server["args"] = [str(arg) for arg in request.args if str(arg).strip()]
+        if request.cwd.strip():
+            next_server["cwd"] = request.cwd.strip()
+        env = _merge_secret_dict(existing.get("env"), request.env)
+        if env:
+            next_server["env"] = env
+
+    servers[name] = next_server
+    _write_dashboard_config(app)
+    rebuilt = _rebuild_agent(app, str(config.get("active_model") or ""))
+    if not rebuilt.get("ok"):
+        return rebuilt
+    return {
+        "ok": True,
+        "type": "mcp_saved",
+        "text": f"MCP 配置已保存并重新加载: {name}",
+        "servers": _safe_mcp_servers(config),
+        "status": _mcp(app.state.gateway.agent),
+    }
+
+
+def _delete_mcp_config(app: FastAPI, server_name: str) -> dict[str, Any]:
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    servers = config.get("mcpServers") if isinstance(config.get("mcpServers"), dict) else {}
+    name = _safe_config_key(server_name)
+    if not name or name not in servers:
+        return {"ok": False, "text": f"未知 MCP Server: {name or '(empty)'}"}
+    del servers[name]
+    _write_dashboard_config(app)
+    rebuilt = _rebuild_agent(app, str(config.get("active_model") or ""))
+    if not rebuilt.get("ok"):
+        return rebuilt
+    return {
+        "ok": True,
+        "type": "mcp_deleted",
+        "text": f"MCP 配置已删除并重新加载: {name}",
+        "servers": _safe_mcp_servers(config),
+        "status": _mcp(app.state.gateway.agent),
+    }
+
+
+def _rebuild_agent(app: FastAPI, model_key: str) -> dict[str, Any]:
+    make_agent = getattr(app.state, "make_agent", None)
+    if not callable(make_agent):
+        return _ok("agent_reload", "Web 后端没有可用的 Agent 重建入口。", success=False)
+    if not model_key:
+        return _ok("agent_reload", "当前没有可用模型，无法重建 Agent。", success=False)
+
+    current_agent = app.state.agent
+    _auto_save_web(current_agent)
+    previous_messages = list(getattr(current_agent, "messages", []) or [])
+    previous_conv_id = getattr(current_agent, "conv_id", None)
+    previous_input_tokens = getattr(current_agent, "total_input_tokens", 0)
+    previous_output_tokens = getattr(current_agent, "total_output_tokens", 0)
+    previous_session_allows = set(getattr(getattr(current_agent, "permission_policy", None), "session_allow_tools", set()) or set())
+    previous_task = _safe_call(current_agent, "task_status", default=None)
+
+    _safe_call(current_agent, "close", default=None, preserve_task=True)
+    new_agent = make_agent(model_key)
+    try:
+        new_agent.messages = previous_messages
+        new_agent.conv_id = previous_conv_id
+        new_agent.total_input_tokens = previous_input_tokens
+        new_agent.total_output_tokens = previous_output_tokens
+        if hasattr(new_agent, "permission_policy"):
+            new_agent.permission_policy.session_allow_tools.update(previous_session_allows)
+        _safe_call(new_agent, "sync_memory_review_state", default=None)
+        _safe_call(new_agent, "refresh_context_estimate", default=None)
+        if isinstance(previous_task, dict) and previous_task.get("status") == "active":
+            _safe_call(new_agent, "resume_task", previous_task.get("id"), default=None)
+    except Exception:
+        pass
+    app.state.agent = new_agent
+    gateway = getattr(app.state, "gateway", None)
+    if gateway is not None:
+        gateway.set_agent(new_agent)
+    model_name = getattr(getattr(new_agent, "llm", None), "model", None) or getattr(new_agent, "model", "")
+    return {
+        "ok": True,
+        "type": "agent_reloaded",
+        "key": model_key,
+        "model": model_name,
+        "text": f"Agent 已重新加载: {model_key}",
+        "usage": _usage(_usage_snapshot(new_agent)),
+        "messages": _web_messages(getattr(new_agent, "messages", [])),
+    }
+
+
+def _write_dashboard_config(app: FastAPI) -> None:
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    config_path = getattr(app.state, "config_path", None)
+    if config_path:
+        Path(config_path).write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+
+def _safe_config_key(value: str) -> str:
+    text = sanitize_text(str(value or "").strip(), max_length=120)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", text):
+        return ""
+    return text
+
+
+def _normalize_web_mcp_transport(value: str) -> str:
+    text = str(value or "").strip().lower().replace("-", "")
+    if text in {"http", "streamable", "streamablehttp"}:
+        return "streamablehttp"
+    return "stdio"
+
+
+def _merge_secret_dict(existing: Any, incoming: dict[str, str]) -> dict[str, str]:
+    base = existing if isinstance(existing, dict) else {}
+    result: dict[str, str] = {}
+    for key, value in incoming.items():
+        clean_key = sanitize_text(str(key).strip(), max_length=160)
+        if not clean_key:
+            continue
+        clean_value = str(value or "")
+        if _is_masked_secret(clean_value):
+            if clean_key in base:
+                result[clean_key] = str(base.get(clean_key) or "")
+            continue
+        if clean_value:
+            result[clean_key] = clean_value
+    return result
+
+
+def _safe_mcp_servers(config: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_servers = config.get("mcpServers") if isinstance(config.get("mcpServers"), dict) else {}
+    servers = []
+    for name, server in raw_servers.items():
+        if not isinstance(server, dict):
+            continue
+        servers.append({
+            "name": name,
+            "type": server.get("type") or ("streamablehttp" if server.get("url") else "stdio"),
+            "enabled": server.get("enabled", True) is not False,
+            "command": server.get("command", ""),
+            "args": server.get("args", []) if isinstance(server.get("args"), list) else [],
+            "url": server.get("url", ""),
+            "cwd": server.get("cwd", ""),
+            "headers": _masked_secret_dict(server.get("headers")),
+            "env": _masked_secret_dict(server.get("env")),
+        })
+    return servers
+
+
+def _masked_secret_dict(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): _mask_secret(str(raw or "")) for key, raw in value.items()}
+
+
+def _secret_preview(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    return _mask_secret(text)
+
+
+def _mask_secret(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if len(text) <= 8:
+        return "********"
+    return f"{text[:4]}...{text[-4:]}"
+
+
+def _is_masked_secret(value: str) -> bool:
+    text = str(value or "").strip()
+    return not text or text == "********" or ("..." in text and len(text) <= 32)
+
+
+def _repair_payload_text(value: Any) -> Any:
+    if isinstance(value, str):
+        return _repair_mojibake(value)
+    if isinstance(value, list):
+        return [_repair_payload_text(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _repair_payload_text(item) for key, item in value.items()}
+    return value
+
+
+_MOJIBAKE_HINTS = (
+    "�", "鈥", "鈫", "銆", "妯", "浼", "鎬", "璇", "鍛", "鏌", "鍒",
+    "褰", "宸", "涓", "鐢", "閫", "鍙", "绋", "犻", "湪", "湁",
+)
+
+
+def _repair_mojibake(text: str) -> str:
+    if not text or not any(hint in text for hint in _MOJIBAKE_HINTS):
+        return text
+    candidates = [text]
+    for codec in ("gb18030", "gbk", "cp936"):
+        try:
+            candidates.append(text.encode(codec, errors="ignore").decode("utf-8", errors="ignore"))
+        except (UnicodeEncodeError, UnicodeDecodeError, LookupError):
+            continue
+
+    def score(candidate: str) -> tuple[int, int]:
+        bad = sum(candidate.count(hint) for hint in _MOJIBAKE_HINTS)
+        replacement = candidate.count("�") + candidate.count("?")
+        cjk = sum(1 for char in candidate if "\u4e00" <= char <= "\u9fff")
+        return (bad * 6 + replacement * 2, -cjk)
+
+    best = min(candidates, key=score)
+    return best if score(best) < score(text) else text
 
 
 def _format_help() -> str:
@@ -1051,6 +1377,203 @@ def _format_skill_usage_stats(stats: dict[str, Any]) -> str:
     lines = [
         f"Skill 使用统计 · {stats.get('total_turns', 0)} turns · {stats.get('total_events', 0)} events"
     ]
+    for item in stats.get("skills", [])[:20]:
+        lines.append(f"- {item.get('skill_name', '?')}: view {item.get('views', 0)} · failed {item.get('failures', 0)}")
+    if len(lines) == 1:
+        lines.append("暂无 Skill 调用记录。")
+    return "\n".join(lines)
+
+
+def _format_debug_context(status: dict[str, Any]) -> str:
+    if not status.get("available", False):
+        return "上下文调试信息不可用。"
+    summary = status.get("summary") if isinstance(status.get("summary"), dict) else {}
+    blocks = summary.get("blocks") if isinstance(summary.get("blocks"), list) else []
+    if not blocks:
+        return "上下文调试信息已开启，但暂无分块明细。"
+    lines = ["当前上下文结构"]
+    for block in blocks:
+        lines.append(f"- {block.get('name', 'block')}: {block.get('tokens', '?')} tokens")
+    return "\n".join(lines)
+
+
+def _format_models(models: list[dict[str, Any]]) -> str:
+    if not models:
+        return "没有配置模型。"
+    lines = ["可用模型"]
+    for model in models:
+        marker = "●" if model.get("active") else "○"
+        lines.append(f"{marker} {model.get('key')} · {model.get('name')}")
+    return "\n".join(lines)
+
+
+def _format_help() -> str:
+    return "\n".join([
+        "Web 可用命令",
+        "/new 新会话",
+        "/list 或 /sessions 查看会话",
+        "/session-search <关键词> 搜索会话",
+        "/session-load <id> 加载会话",
+        "/undo [n] 撤回对话",
+        "/retry 重试上一轮",
+        "/model [key] 查看或切换模型",
+        "/compress 手动压缩上下文",
+        "/memory 查看记忆",
+        "/memory-search <问题> 搜索向量记忆",
+        "/memory-forget <ID> 删除指定向量记忆",
+        "/memory-clear 清空向量记忆",
+        "/task 查看任务计划",
+        "/task-cancel 放弃当前任务",
+        "/jobs 查看后台任务",
+        "/cron 查看定时提示",
+        "/cron-add <分钟> <提示> 创建定时提示",
+        "/cron-remove [id] 删除定时提示",
+        "/mcp 查看 MCP 状态",
+        "/skills 查看技能",
+        "/skills-reload 重新加载技能",
+        "/skills-stats 查看技能统计",
+        "/debug-context 查看上下文结构",
+        "/audit 查看工具审计",
+    ])
+
+
+def _format_memory_status(status: dict[str, Any]) -> str:
+    lines = ["记忆状态"]
+    curated = str(status.get("curated") or "").strip()
+    lines.append(curated or "暂无精选长期记忆。")
+    providers = status.get("providers") if isinstance(status.get("providers"), list) else []
+    if providers:
+        lines.append("")
+        lines.append("Provider")
+        for provider in providers:
+            name = provider.get("name", "unknown")
+            if not provider.get("available", False):
+                lines.append(f"- {name}: 不可用 · {provider.get('error', 'unknown error')}")
+            elif name == "markdown":
+                lines.append(f"- markdown: MEMORY {provider.get('memory_entries', 0)} 条 · USER {provider.get('user_entries', 0)} 条")
+            elif name == "local_vector":
+                lines.append(f"- local_vector: {provider.get('records', 0)} 条 · {provider.get('embedding_model', 'unknown')}")
+            else:
+                lines.append(f"- {name}: ready")
+    return "\n".join(lines)
+
+
+def _format_memory_search(results: list[dict[str, Any]]) -> str:
+    if not results:
+        return "没有找到相关向量记忆。"
+    lines = [f"找到 {len(results)} 条相关记忆"]
+    for result in results:
+        content = " ".join(str(result.get("content", "")).split())
+        if len(content) > 300:
+            content = content[:300] + "..."
+        score = float(result.get("score", 0) or 0)
+        created_at = str(result.get("created_at", ""))[:19].replace("T", " ")
+        lines.append(f"#{result.get('id', '?')} · {score:.2f} · {created_at or 'unknown'}\n  {content}")
+    return "\n".join(lines)
+
+
+def _format_sessions(sessions: list[dict[str, Any]]) -> str:
+    if not sessions:
+        return "暂无历史会话。"
+    lines = [f"历史会话 · {len(sessions)} 条"]
+    for index, session in enumerate(sessions[:20], 1):
+        title = str(session.get("title") or "(untitled)").strip()
+        if len(title) > 60:
+            title = title[:60] + "..."
+        updated = session.get("updated_at", session.get("updated", session.get("created_at", session.get("created"))))
+        lines.append(f"[{index}] {session.get('id', '')}\n  {title}\n  {_format_timestamp(updated)}")
+    return "\n".join(lines)
+
+
+def _format_session_search(results: list[dict[str, Any]]) -> str:
+    if not results:
+        return "没有找到相关历史会话。"
+    lines = [f"会话搜索 · 找到 {len(results)} 条"]
+    for result in results[:20]:
+        session_id = result.get("session_id") or result.get("id") or ""
+        title = str(result.get("title") or "(untitled)").strip()
+        snippet = " ".join(str(result.get("snippet") or result.get("content") or "").split())
+        if len(snippet) > 220:
+            snippet = snippet[:220] + "..."
+        lines.append(f"{session_id}\n  {title}" + (f"\n  {snippet}" if snippet else ""))
+    return "\n".join(lines)
+
+
+def _format_audit(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return "暂无工具审计记录。"
+    lines = [f"最近工具审计 · {len(records)} 条"]
+    for record in records[-20:]:
+        tool = record.get("tool") or record.get("tool_name") or record.get("name") or "tool"
+        state = "ok" if record.get("success") is True else "failed" if record.get("success") is False else record.get("risk", "event")
+        lines.append(f"- {tool} · {state} · {record.get('timestamp', '')}")
+    return "\n".join(lines)
+
+
+def _format_task_status(task: dict[str, Any] | None) -> str:
+    if not task:
+        return "当前没有任务计划。"
+    steps = task.get("steps") if isinstance(task.get("steps"), list) else []
+    completed = sum(1 for step in steps if step.get("status") == "completed")
+    lines = [
+        f"任务: {task.get('objective', task.get('id', ''))}",
+        f"状态: {task.get('status', 'unknown')} · {completed}/{len(steps)}",
+    ]
+    for step in steps:
+        icon = {"completed": "✓", "in_progress": "•", "pending": "-"}.get(step.get("status"), "?")
+        lines.append(f"{icon} {step.get('step', '')}")
+    return "\n".join(lines)
+
+
+def _format_jobs(status: dict[str, Any]) -> str:
+    if not status.get("enabled", False):
+        return "后台任务队列未启用。"
+    return (
+        f"后台任务 · pending {status.get('pending_count', 0)} · "
+        f"running {status.get('running_count', 0)} · failed {status.get('failed_count', 0)}"
+    )
+
+
+def _format_cron_status(status: dict[str, Any]) -> str:
+    if not status.get("enabled", True):
+        return "定时提示未启用。"
+    tasks = status.get("tasks") if isinstance(status.get("tasks"), list) else []
+    if not tasks:
+        return "暂无定时提示。用 /cron-add <分钟> <提示> 创建。"
+    lines = [f"定时提示 · {len(tasks)} 个"]
+    for task in tasks:
+        lines.append(
+            f"- {task.get('id', '')} · every {task.get('interval_minutes', '?')} min · "
+            f"next {_format_timestamp(task.get('next_run_at'))}\n  {task.get('prompt', '')}"
+        )
+    return "\n".join(lines)
+
+
+def _format_mcp(status: dict[str, Any]) -> str:
+    servers = status.get("servers")
+    if isinstance(servers, dict):
+        servers = [{"name": name, **(value if isinstance(value, dict) else {})} for name, value in servers.items()]
+    if not isinstance(servers, list) or not servers:
+        return "暂无 MCP Server。"
+    lines = [f"MCP Server · {len(servers)} 个"]
+    for server in servers:
+        lines.append(f"- {server.get('name') or server.get('id') or 'mcp'} · {server.get('status') or 'configured'} · {server.get('transport') or server.get('type') or 'unknown'}")
+    return "\n".join(lines)
+
+
+def _format_skills(skills: list[dict[str, Any]]) -> str:
+    if not skills:
+        return "暂无可用技能。"
+    lines = [f"Skills · {len(skills)} 个"]
+    for skill in skills[:40]:
+        lines.append(f"- {skill.get('category', 'general')}/{skill.get('name', '')} · {skill.get('readiness_status', 'ready')}")
+    return "\n".join(lines)
+
+
+def _format_skill_usage_stats(stats: dict[str, Any]) -> str:
+    if not stats.get("enabled", True) and not stats:
+        return "Skill 使用追踪未启用。"
+    lines = [f"Skill 使用统计 · {stats.get('total_turns', 0)} turns · {stats.get('total_events', 0)} events"]
     for item in stats.get("skills", [])[:20]:
         lines.append(f"- {item.get('skill_name', '?')}: view {item.get('views', 0)} · failed {item.get('failures', 0)}")
     if len(lines) == 1:

@@ -309,6 +309,33 @@ class DashboardApiTest(unittest.TestCase):
         self.assertTrue(waiter["event"].is_set())
         self.assertEqual(waiter["response"]["value"], "A")
 
+    def test_chat_cancel_endpoint_releases_pending_requests(self):
+        app = create_dashboard_app(
+            FakeAgent(),
+            config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+            sierra_dir=".",
+            static_dir="missing-dist",
+        )
+        client = TestClient(app)
+        approval_waiter = {"event": threading.Event(), "decision": "once"}
+        input_waiter = {"event": threading.Event(), "response": {"cancelled": False}}
+        with app.state.approval_lock:
+            app.state.pending_approvals["tool-test"] = approval_waiter
+        with app.state.input_lock:
+            app.state.pending_inputs["input-test"] = input_waiter
+
+        response = client.post("/api/chat/cancel")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["released_approvals"], 1)
+        self.assertEqual(payload["released_inputs"], 1)
+        self.assertTrue(approval_waiter["event"].is_set())
+        self.assertEqual(approval_waiter["decision"], "deny")
+        self.assertTrue(input_waiter["event"].is_set())
+        self.assertTrue(input_waiter["response"]["cancelled"])
+
     def test_command_endpoint_returns_help(self):
         app = create_dashboard_app(
             FakeAgent(),

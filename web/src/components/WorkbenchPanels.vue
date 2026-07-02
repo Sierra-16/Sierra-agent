@@ -26,11 +26,11 @@
     <template v-else-if="activeView === 'memory'">
       <div class="page-heading">
         <h3>记忆</h3>
-        <p>长期偏好和向量记忆状态。这里不做花哨看板，只显示能判断系统是否工作的信息。</p>
+        <p>长期偏好和记忆状态。这里显示 Sierra 记住了什么，以及记忆是否正常可用。</p>
       </div>
       <div class="split-content">
         <section class="flat-section">
-          <h4>Providers</h4>
+          <h4>记忆存储</h4>
           <div class="flat-list">
             <div v-for="provider in safeArray(payload.memory.providers)" :key="provider.name" class="list-row">
               <span>
@@ -42,7 +42,7 @@
           </div>
         </section>
         <section class="flat-section">
-          <h4>Curated Memory</h4>
+          <h4>精选记忆</h4>
           <pre class="memory-text">{{ payload.memory.curated || "暂无精选记忆。" }}</pre>
         </section>
       </div>
@@ -51,7 +51,7 @@
     <template v-else-if="activeView === 'tools'">
       <div class="page-heading">
         <h3>工具</h3>
-        <p>当前模型可调用的本地能力。只读工具、写入工具和高风险工具后续可以在这里配置策略。</p>
+        <p>当前 Sierra 可以调用的工具。后续可以在这里调整只读、写入和高风险操作的规则。</p>
       </div>
       <div class="toolbar-line">
         <Search :size="16" />
@@ -59,7 +59,7 @@
       </div>
       <div class="split-content">
         <section class="flat-section narrow">
-          <h4>Toolsets</h4>
+          <h4>工具分类</h4>
           <div class="pill-list">
             <button
               v-for="item in toolsets"
@@ -74,7 +74,7 @@
           </div>
         </section>
         <section class="flat-section">
-          <h4>Tools</h4>
+          <h4>工具列表</h4>
           <div class="tool-table">
             <div v-for="tool in filteredTools" :key="tool.name" class="tool-row">
               <strong>{{ tool.name }}</strong>
@@ -88,7 +88,7 @@
     <template v-else-if="activeView === 'skills'">
       <div class="page-heading">
         <h3>Skills</h3>
-        <p>渐进式披露的能力说明。Sierra 会按任务需要把相关 skill 注入上下文。</p>
+        <p>Sierra 会按任务选择合适的能力包，让回答和操作更专业。</p>
       </div>
       <div class="flat-list">
         <div v-for="skill in safeArray(payload.skills.items)" :key="skill.name" class="list-row">
@@ -104,7 +104,7 @@
     <template v-else-if="activeView === 'mcp'">
       <div class="page-heading">
         <h3>MCP</h3>
-        <p>外部工具协议接入。这里展示 server、transport 和连接状态。</p>
+        <p>外部工具接入状态。这里展示工具服务名称、连接方式和当前状态。</p>
       </div>
       <div class="flat-list">
         <div v-for="server in mcpServers" :key="server.name || server.id" class="list-row">
@@ -114,14 +114,14 @@
           </span>
           <b>{{ server.status || server.state || "configured" }}</b>
         </div>
-        <EmptyBlock v-if="!mcpServers.length" title="没有 MCP Server" description="在 config.json 里配置后会显示在这里。" />
+        <EmptyBlock v-if="!mcpServers.length" title="还没有工具服务" description="在设置里添加后会显示在这里。" />
       </div>
     </template>
 
     <template v-else-if="activeView === 'integrations'">
       <div class="page-heading">
         <h3>平台接入</h3>
-        <p>给微信、Telegram、飞书等外部平台预留的接入工作台。具体 token 和 webhook 放到右上角设置。</p>
+        <p>给微信、Telegram、飞书等平台预留的接入工作台。具体令牌和回调地址放到设置里管理。</p>
       </div>
       <div class="integration-list">
         <div v-for="channel in channels" :key="channel.name" class="integration-row">
@@ -148,7 +148,7 @@
           </span>
           <b>{{ task.next_run || task.next || "pending" }}</b>
         </div>
-        <EmptyBlock v-if="!cronTasks.length" title="暂无定时任务" description="在 TUI 创建提醒后会出现在这里。" />
+        <EmptyBlock v-if="!cronTasks.length" title="暂无定时任务" description="创建提醒后会出现在这里。" />
       </div>
     </template>
 
@@ -251,9 +251,9 @@ const channels = [
     icon: Bot
   },
   {
-    name: "Webhook",
+    name: "回调入口",
     status: "预留",
-    description: "给其他平台统一接入事件。",
+    description: "给其他平台统一接收消息和事件。",
     icon: Cable
   }
 ];

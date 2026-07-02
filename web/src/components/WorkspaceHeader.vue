@@ -7,7 +7,7 @@
 
     <div class="header-actions">
       <span class="model-pill" :title="activeModelLabel">{{ activeModelLabel }}</span>
-      <span class="ctx-pill" :title="workspace">ctx {{ usagePercent.toFixed(0) }}%</span>
+      <span class="ctx-pill" :title="workspace">上下文 {{ usagePercent.toFixed(0) }}%</span>
       <button class="icon-action" type="button" title="打开设置" @click="$emit('open-settings')">
         <Settings2 :size="17" />
       </button>

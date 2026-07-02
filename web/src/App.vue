@@ -27,6 +27,7 @@
           :usage-percent="usagePercent"
           :workspace="payload?.identity.workspace"
           @approve-tool="respondToolApproval"
+          @cancel-chat="cancelChat"
           @refresh="loadDashboard"
           @respond-user-input="respondUserInput"
           @send="sendChat"
@@ -45,7 +46,7 @@
       :payload="payload"
       :usage-percent="usagePercent"
       @close="settingsOpen = false"
-      @run-command="runCommandFromPanel"
+      @refresh="loadDashboard"
     />
   </div>
 </template>
@@ -92,6 +93,7 @@ const chatMessages = ref<ChatMessage[]>([]);
 const activityEvents = ref<ChatActivityEvent[]>([]);
 const bootstrappedConversation = ref(false);
 let timer: number | undefined;
+let activeChatAbortController: AbortController | null = null;
 
 const mainNav: NavItem[] = [
   { id: "chat", label: "会话", subtitle: "Chat", icon: MessageCircle }
@@ -116,10 +118,9 @@ function newId() {
 
 function appendSystem(text: string) {
   const clean = String(text || "").trim();
-  if (!clean) {
-    return;
+  if (clean) {
+    chatMessages.value.push({ id: newId(), role: "system", text: clean });
   }
-  chatMessages.value.push({ id: newId(), role: "system", text: clean });
 }
 
 function mapMessages(messages: any[]): ChatMessage[] {
@@ -152,14 +153,14 @@ async function startLocalChat() {
     try {
       await fetch("/api/conversations/new", { method: "POST" });
     } catch {
-      // Keep the page usable while the backend is still warming up.
+      // 页面仍可继续使用。
     }
   }
   chatMessages.value = [
     {
       id: newId(),
       role: "assistant",
-      text: "新会话开好了。别磨蹭啦，今天要让 Sierra 做什么？"
+      text: "新会话开好了。哼，说吧，今天要让 Sierra 做什么？"
     }
   ];
 }
@@ -208,7 +209,7 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
       id: "thinking",
       type: "thinking",
       label: "思考中",
-      detail: "Sierra 正在整理上下文和下一步。",
+      detail: "",
       status: "active"
     }
   ];
@@ -226,10 +227,13 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
   };
 
   try {
+    const controller = new AbortController();
+    activeChatAbortController = controller;
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify({ message: text }),
+      signal: controller.signal
     });
     if (!response.ok) {
       throw new Error(`Chat API ${response.status}`);
@@ -271,11 +275,21 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
       chatMessages.value.push({
         id: assistantId,
         role: "assistant",
-        text: "我这边没拿到回复。别看我，肯定是哪条链路没接好。"
+        text: "这边没有拿到回复。别看我，链路那边肯定有点别扭。"
       });
     }
     await loadDashboard({ bootstrap: false });
   } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      appendSystem("已中断当前处理。");
+      upsertActivity("interrupted", {
+        type: "error",
+        label: "已中断",
+        detail: "这次 Web 请求已停止，Sierra 可以继续接收新消息。",
+        status: "error"
+      });
+      return;
+    }
     chatMessages.value.push({
       id: newId(),
       role: "assistant",
@@ -288,6 +302,7 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
       status: "error"
     });
   } finally {
+    activeChatAbortController = null;
     sending.value = false;
     markAllActivityDone();
     window.setTimeout(() => {
@@ -301,10 +316,6 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
 async function runCommandText(text: string) {
   const command = text.trim().split(/\s+/)[0] || "/help";
   await runCommandPayload({ command, text }, { appendUser: true, appendResult: true });
-}
-
-async function runCommandFromPanel(command: string | Record<string, any>) {
-  await runCommandPayload(command, { appendUser: false, appendResult: true });
 }
 
 async function runCommandPayload(
@@ -402,7 +413,7 @@ function processChatStreamLine(
     if (assistant) {
       assistant.text += String(event.text || "");
     }
-    markActivity("thinking", { status: "done", detail: "Sierra 开始回复。" });
+    markActivity("thinking", { status: "done", detail: "" });
     return;
   }
   if (event.type === "done") {
@@ -410,23 +421,45 @@ function processChatStreamLine(
     markAllActivityDone();
     return;
   }
+  if (event.type === "interrupted") {
+    upsertActivity("interrupted", {
+      type: "error",
+      label: "已中断",
+      detail: String(event.text || "当前处理已停止。"),
+      status: "error"
+    });
+    markAllActivityDone();
+    return;
+  }
   handleActivityEvent(event);
 }
 
-function upsertActivity(
-  id: string,
-  patch: Omit<ChatActivityEvent, "id"> & { status?: ChatActivityStatus }
-) {
+async function cancelChat() {
+  if (!sending.value) {
+    return;
+  }
+  activeChatAbortController?.abort();
+  try {
+    await fetch("/api/chat/cancel", { method: "POST" });
+  } catch {
+    // 本地中断已经足够让 Web UI 恢复。
+  }
+  sending.value = false;
+  upsertActivity("interrupted", {
+    type: "error",
+    label: "已中断",
+    detail: "当前 Web 处理已停止。",
+    status: "error"
+  });
+}
+
+function upsertActivity(id: string, patch: Omit<ChatActivityEvent, "id"> & { status?: ChatActivityStatus }) {
   const existing = activityEvents.value.find((event) => event.id === id);
   if (existing) {
     Object.assign(existing, patch);
     return;
   }
-  activityEvents.value.push({
-    id,
-    ...patch,
-    status: patch.status || "active"
-  });
+  activityEvents.value.push({ id, ...patch, status: patch.status || "active" });
 }
 
 function markActivity(id: string, patch: Partial<ChatActivityEvent>) {
@@ -451,12 +484,7 @@ function handleActivityEvent(event: any) {
   }
 
   if (type === "thinking") {
-    upsertActivity("thinking", {
-      type,
-      label: "思考中",
-      detail: "Sierra 正在整理上下文和下一步。",
-      status: "active"
-    });
+    upsertActivity("thinking", { type, label: "思考中", detail: "", status: "active" });
     return;
   }
 
@@ -465,7 +493,7 @@ function handleActivityEvent(event: any) {
     upsertActivity(`tool:${name}`, {
       type: "tool",
       label: "调用工具",
-      detail: "正在准备参数并执行。",
+      detail: "正在执行。",
       status: "active",
       toolName: name,
       progress: 64
@@ -506,7 +534,7 @@ function handleActivityEvent(event: any) {
     upsertActivity(`approval:${approvalId}`, {
       type: "approval",
       label: "需要确认",
-      detail: "请确认是否允许 Sierra 执行这个工具。",
+      detail: "请选择是否允许 Sierra 执行这个工具。",
       status: "active",
       toolName: name,
       approvalId,
@@ -522,9 +550,9 @@ function handleActivityEvent(event: any) {
     const approved = Boolean(event.approved);
     upsertActivity(`approval:${approvalId}`, {
       type: "approval",
-      label: approved ? "已批准" : "已拒绝",
+      label: approved ? "已允许" : "已拒绝",
       detail: approved
-        ? `许可范围: ${event.decision === "session" ? "本会话" : "仅本次"}`
+        ? `许可范围: ${event.decision === "session" ? "本会话" : "本次"}`
         : event.timed_out ? "等待超时，已拒绝。" : "工具调用已拒绝。",
       status: approved ? "done" : "error",
       approvalId,
@@ -563,7 +591,7 @@ function handleActivityEvent(event: any) {
     const inputId = String(event.id || "");
     upsertActivity(`user-input:${inputId}`, {
       type: "user-input",
-      label: event.cancelled ? "已跳过补充" : "已收到补充",
+      label: event.cancelled ? "已跳过" : "已收到",
       detail: event.cancelled ? "Sierra 将按已有信息继续。" : String(event.label || "选择已提交。"),
       status: event.cancelled ? "error" : "done",
       inputId
@@ -574,8 +602,8 @@ function handleActivityEvent(event: any) {
   if (type === "context_compaction_start") {
     upsertActivity("context", {
       type: "context",
-      label: "压缩上下文",
-      detail: "正在整理较早的对话，让当前请求继续。",
+      label: "整理上下文",
+      detail: "正在压缩较早的对话。",
       status: "active"
     });
     return;
@@ -584,8 +612,8 @@ function handleActivityEvent(event: any) {
   if (type === "context_compaction_done") {
     upsertActivity("context", {
       type: "context",
-      label: "上下文已压缩",
-      detail: "历史轮次已摘要化，当前请求继续执行。",
+      label: "上下文已整理",
+      detail: "历史轮次已摘要化。",
       status: "done"
     });
     return;
@@ -703,7 +731,7 @@ async function respondToolApproval(id: string, decision: "once" | "session" | "d
 
 async function respondUserInput(
   id: string,
-  input: { value?: string; label?: string; free_text?: string; cancelled?: boolean }
+  input: { value?: string; label?: string; free_text?: boolean; cancelled?: boolean }
 ) {
   const event = activityEvents.value.find((item) => item.inputId === id);
   if (event) {
@@ -714,7 +742,13 @@ async function respondUserInput(
     const response = await fetch("/api/chat/input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, ...input })
+      body: JSON.stringify({
+        id,
+        value: input.value || "",
+        label: input.label || "",
+        free_text: Boolean(input.free_text),
+        cancelled: Boolean(input.cancelled)
+      })
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {

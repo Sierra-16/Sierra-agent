@@ -55,7 +55,7 @@
         <Settings2 :size="17" />
         <span>
           <strong>设置</strong>
-          <small>模型 / 工具 / 接入</small>
+          <small>模型、能力、工具接入</small>
         </span>
       </button>
     </section>

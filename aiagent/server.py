@@ -1,5 +1,4 @@
 """JSON-line stdin/stdout server for the TUI frontend."""
-import io
 import json
 import os
 import sys
@@ -17,6 +16,7 @@ from .config_validation import (
     format_config_issues,
     validate_model_config,
 )
+from .gateway import GatewayRuntime
 from .safety import sanitize_arguments
 
 
@@ -27,6 +27,13 @@ def run_server(
     make_agent: Callable[[str], Agent] | None = None,
 ):
     current_agent = agent
+    gateway = GatewayRuntime(
+        current_agent,
+        config=config,
+        config_path=config_path,
+        make_agent=make_agent,
+        id_factory=lambda: uuid.uuid4().hex,
+    )
 
     for line in sys.stdin:
         line = line.strip()
@@ -60,123 +67,49 @@ def run_server(
             if not user_msg:
                 continue
             try:
-                real_stdout = sys.stdout
-                sys.stdout = io.StringIO()
-
-                def on_status(event):
+                def emit(event):
                     sys.__stdout__.write(json.dumps(event, ensure_ascii=False) + "\n")
                     sys.__stdout__.flush()
 
-                def on_tool_approval(request):
-                    approval_id = f"tool-{uuid.uuid4().hex[:12]}"
-                    on_status({
-                        "type": "tool_approval_request",
-                        "id": approval_id,
-                        "name": request.get("name", "tool"),
-                        "risk": request.get("risk", "medium"),
-                        "reason": request.get("reason", ""),
-                        "arguments": request.get("arguments", "{}"),
-                    })
-
-                    while True:
-                        approval_line = sys.stdin.readline()
-                        if not approval_line:
-                            on_status({
-                                "type": "tool_approval_result",
-                                "id": approval_id,
-                                "name": request.get("name", "tool"),
-                                "decision": "deny",
-                                "approved": False,
-                            })
-                            return "deny"
-
-                        try:
-                            approval_msg = json.loads(approval_line)
-                        except json.JSONDecodeError:
-                            continue
-
-                        cmd = approval_msg.get("cmd")
-                        if cmd == "tool_approval" and approval_msg.get("id") == approval_id:
-                            decision = approval_msg.get("decision")
-                            if decision not in ("once", "session", "deny"):
-                                approved = bool(approval_msg.get("approved"))
-                                decision = "once" if approved else "deny"
-                            on_status({
-                                "type": "tool_approval_result",
-                                "id": approval_id,
-                                "name": request.get("name", "tool"),
-                                "decision": decision,
-                                "approved": decision in ("once", "session"),
-                            })
-                            return decision
-
-                        if cmd == "quit":
-                            _auto_save(current_agent)
-                            current_agent.close()
-                            stdout(json.dumps({"type": "bye"}))
-                            raise SystemExit(0)
-
-                def on_user_input(request):
-                    request_id = f"input-{uuid.uuid4().hex[:12]}"
-                    on_status({
-                        "type": "user_input_request",
-                        "id": request_id,
-                        "question": request.get("question", "请补充你的需求"),
-                        "options": request.get("options", []),
-                        "allow_free_text": request.get("allow_free_text", True),
-                    })
-
+                def read_interaction(expected_cmd, request_id):
                     while True:
                         response_line = sys.stdin.readline()
                         if not response_line:
-                            response = {"cancelled": True}
-                            on_status({
-                                "type": "user_input_result",
-                                "id": request_id,
-                                **response,
-                            })
-                            return response
+                            if expected_cmd == "user_input_response":
+                                return {"cancelled": True}
+                            return {"decision": "deny"}
 
                         try:
                             response_msg = json.loads(response_line)
                         except json.JSONDecodeError:
                             continue
 
-                        cmd = response_msg.get("cmd")
-                        if cmd == "user_input_response" and response_msg.get("id") == request_id:
-                            response = {
-                                "value": str(response_msg.get("value", "")),
-                                "label": str(response_msg.get("label", "")),
-                                "free_text": bool(response_msg.get("free_text")),
-                                "cancelled": bool(response_msg.get("cancelled")),
-                            }
-                            on_status({
-                                "type": "user_input_result",
-                                "id": request_id,
-                                **response,
-                            })
-                            return response
+                        response_cmd = response_msg.get("cmd")
+                        if response_cmd == expected_cmd and response_msg.get("id") == request_id:
+                            return response_msg
 
-                        if cmd == "quit":
+                        if response_cmd == "quit":
                             _auto_save(current_agent)
                             current_agent.close()
                             stdout(json.dumps({"type": "bye"}))
                             raise SystemExit(0)
 
-                response = current_agent.chat(
+                result = gateway.chat(
                     user_msg,
-                    on_status=on_status,
-                    on_tool_approval=on_tool_approval,
-                    on_user_input=on_user_input,
+                    emit=emit,
+                    interaction="interactive",
+                    input_reader=read_interaction,
+                    suppress_output=True,
                 )
-                sys.stdout = real_stdout
                 stdout(json.dumps({
                     "type": "done",
-                    "text": response or "",
+                    "text": result.answer or "",
                     "usage": _usage_payload(current_agent),
                     "task": _agent_task_status(current_agent),
                 }, ensure_ascii=False))
                 _auto_save(current_agent)
+                continue
+
             except Exception as e:
                 sys.stdout = sys.__stdout__
                 stdout(json.dumps({"type": "error", "text": str(e)}, ensure_ascii=False))
@@ -204,7 +137,7 @@ def run_server(
             if not query:
                 stdout(json.dumps({
                     "type": "session_search",
-                    "text": "用法: /session-search <关键词>",
+                    "text": "闂傚倸鍊搁崐鎼佸磹閹间礁纾归柣鎴ｅГ閸婂潡鏌ㄩ弴妤€浜惧銈庝簻閸熸潙鐣疯ぐ鎺濇晪闁告侗鍨版慨娲⒒娴ｄ警娼掗柛鏇炵仛閻ｅ墎绱撴担鎻掍壕婵犮垼娉涙径鍥磻閹捐崵宓侀柛顭戝枛婵骸鈹戦悙棰濆殝缂佺姵鎸搁悾? /session-search <闂傚倸鍊搁崐鎼佸磹閹间礁纾归柣鎴ｅГ閸ゅ嫰鏌涢锝嗙５闁逞屽墾缁犳挸鐣锋總绋款潊闁炽儱鍟跨花銉╂⒒娴ｇ儤鍤€妞ゆ洦鍙冨畷鎴︽偄閾忛€涚瑝闂佽鍨庨埀顒勫绩娴犲鐓熸俊顖氭惈缁狙囨煙閸忕厧濮嶉柡宀嬬磿閳ь剨绲洪弲婵嬪礉瀹ュ鐓忛柛銉戝喚浼冨Δ鐘靛仦椤洭骞戦崟顖涘剮闁硅櫣鍋熺粔顕€鏌?",
                 }, ensure_ascii=False))
                 continue
             try:
@@ -224,7 +157,7 @@ def run_server(
                 stdout(json.dumps({
                     "type": "session_loaded",
                     "success": False,
-                    "text": "用法: /session-load <session_id>",
+                    "text": "Usage: /session-load <session_id>",
                 }, ensure_ascii=False))
                 continue
             _auto_save(current_agent)
@@ -236,9 +169,9 @@ def run_server(
                 "usage": _usage_payload(current_agent),
                 "task": _agent_task_status(current_agent),
                 "text": (
-                    f"已加载会话 {session_id}"
+                    "Loaded session " + session_id
                     if result.get("ok")
-                    else result.get("error", "加载会话失败")
+                    else result.get("error", "Failed to load session.")
                 ),
             }, ensure_ascii=False))
 
@@ -280,9 +213,9 @@ def run_server(
                 "type": "history_changed",
                 "success": bool(result.get("ok")),
                 "text": (
-                    f"已撤回 {result.get('removed_user_turns', count)} 轮对话。"
+                    "Undid " + str(result.get("removed_user_turns", count)) + " turns."
                     if result.get("ok")
-                    else result.get("error", "没有可撤回的对话。")
+                    else result.get("error", "Undo failed.")
                 ),
                 "messages": _display_messages(current_agent),
                 "usage": _usage_payload(current_agent),
@@ -295,7 +228,7 @@ def run_server(
                 stdout(json.dumps({
                     "type": "history_changed",
                     "success": False,
-                    "text": result.get("error", "没有可重试的上一轮。"),
+                    "text": result.get("error", "Retry failed; previous user message was not found."),
                     "messages": _display_messages(current_agent),
                     "usage": _usage_payload(current_agent),
                     "task": _agent_task_status(current_agent),
@@ -305,7 +238,7 @@ def run_server(
             stdout(json.dumps({
                 "type": "retry_ready",
                 "success": True,
-                "text": "已回退上一轮，正在重试。",
+                "text": "Ready to retry the previous turn.",
                 "query": result.get("user_message", ""),
                 "messages": _display_messages(current_agent),
                 "usage": _usage_payload(current_agent),
@@ -317,11 +250,18 @@ def run_server(
             result = current_agent.compress_messages(force=True)
             if result.get("compressed"):
                 text = (
-                    f"压缩完成: {old} → {len(current_agent.messages)} 条，"
-                    f"约 {result['before_tokens']} → {result['after_tokens']} tokens"
+                    "Compressed: "
+                    + str(old)
+                    + " -> "
+                    + str(len(current_agent.messages))
+                    + " messages, approx "
+                    + str(result["before_tokens"])
+                    + " -> "
+                    + str(result["after_tokens"])
+                    + " tokens"
                 )
             else:
-                text = "当前没有可安全压缩的完整历史轮次，消息未改变。"
+                text = "Current context does not need compression."
             stdout(json.dumps({
                 "type": "ok",
                 "text": text,
@@ -393,13 +333,13 @@ def run_server(
                 current_agent,
                 "cron_add",
                 {"prompt": prompt, "interval_minutes": interval_minutes},
-                "创建本地定时提示",
+                "Create a scheduled reminder.",
             )
             if not approval["approved"]:
                 stdout(json.dumps({
                     "type": "cron",
                     "success": False,
-                    "text": "已取消创建定时提示。",
+                    "text": "Scheduled reminder creation was cancelled.",
                 }, ensure_ascii=False))
                 continue
             result = current_agent.cron_add(prompt, interval_minutes)
@@ -407,9 +347,9 @@ def run_server(
                 "type": "cron",
                 "success": bool(result.get("ok")),
                 "text": (
-                    f"已创建定时提示 {result.get('task', {}).get('id', '')}。"
+                    "Created scheduled reminder " + str(result.get("task", {}).get("id", ""))
                     if result.get("ok")
-                    else result.get("error", "创建失败")
+                    else result.get("error", "Failed to create scheduled reminder.")
                 ),
                 "tasks": current_agent.cron_status().get("tasks", []),
                 "enabled": True,
@@ -421,7 +361,7 @@ def run_server(
                 stdout(json.dumps({
                     "type": "cron",
                     "success": False,
-                    "text": "请选择要删除的定时提示。",
+                    "text": "Usage: /cron-remove <task_id>",
                     "tasks": current_agent.cron_status().get("tasks", []),
                     "enabled": True,
                 }, ensure_ascii=False))
@@ -433,20 +373,20 @@ def run_server(
                     current_agent,
                     "cron_remove",
                     {"id": task_id},
-                    "删除本地定时提示",
+                    "Remove a scheduled reminder.",
                 )
             if not approval["approved"]:
                 stdout(json.dumps({
                     "type": "cron",
                     "success": False,
-                    "text": "已取消删除定时提示。",
+                    "text": "Scheduled reminder removal was cancelled.",
                 }, ensure_ascii=False))
                 continue
             result = current_agent.cron_remove(task_id)
             stdout(json.dumps({
                 "type": "cron",
                 "success": bool(result.get("ok")),
-                "text": "已删除定时提示。" if result.get("ok") else "未找到该定时提示。",
+                "text": "Removed scheduled reminder." if result.get("ok") else result.get("error", "Failed to remove scheduled reminder."),
                 "tasks": current_agent.cron_status().get("tasks", []),
                 "enabled": True,
             }, ensure_ascii=False))
@@ -456,7 +396,7 @@ def run_server(
             if not query:
                 stdout(json.dumps({
                     "type": "memory_search",
-                    "text": "用法: /memory-search <问题>",
+                    "text": "Usage: /memory-search <query>",
                 }, ensure_ascii=False))
                 continue
             try:
@@ -480,12 +420,12 @@ def run_server(
                 except (TypeError, ValueError):
                     stdout(json.dumps({
                         "type": "memory_action",
-                        "text": "记忆 ID 必须是正整数。用法: /memory-forget <ID>",
+                        "text": "Usage: /memory-forget <ID>",
                         "success": False,
                     }, ensure_ascii=False))
                     continue
                 arguments = {"id": memory_id}
-                reason = f"删除当前工作区的向量记忆 #{memory_id}"
+                reason = "Forget one stored memory item #" + str(memory_id) + "."
             else:
                 memory_status = current_agent.memory_status()
                 vector_status = next(
@@ -498,13 +438,13 @@ def run_server(
                 if vector_status is not None and int(vector_status.get("records", 0) or 0) == 0:
                     stdout(json.dumps({
                         "type": "memory_action",
-                        "text": "当前工作区没有向量记忆，无需清空。",
+                        "text": "Vector memory is already empty.",
                         "success": True,
                     }, ensure_ascii=False))
                     continue
                 clear_count = int((vector_status or {}).get("records", 0) or 0)
                 arguments = {"records": clear_count}
-                reason = f"清空当前工作区的全部向量记忆（{clear_count} 条）"
+                reason = "Clear vector memory records: " + str(clear_count) + "."
 
             approval = _request_command_approval(
                 current_agent,
@@ -520,11 +460,11 @@ def run_server(
                     approval,
                     success=False,
                     executed=False,
-                    error="用户或权限策略拒绝操作",
+                    error="User denied memory action.",
                 )
                 stdout(json.dumps({
                     "type": "memory_action",
-                    "text": "已取消记忆删除操作。",
+                    "text": "Memory action was cancelled.",
                     "success": False,
                 }, ensure_ascii=False))
                 continue
@@ -549,22 +489,21 @@ def run_server(
             )
             if cmd == "memory_forget":
                 text = (
-                    f"已删除向量记忆 #{arguments['id']}。"
+                    "Forgot memory #" + str(arguments["id"]) + "."
                     if success
-                    else result.get("error", "删除失败")
+                    else result.get("error", "Failed to forget memory.")
                 )
             else:
                 text = (
-                    f"已清空当前工作区的 {result.get('deleted', 0)} 条向量记忆。"
+                    "Cleared " + str(result.get("deleted", 0)) + " memory records."
                     if success
-                    else result.get("error", "清空失败")
+                    else result.get("error", "Failed to clear memory.")
                 )
             stdout(json.dumps({
                 "type": "memory_action",
                 "text": text,
                 "success": success,
             }, ensure_ascii=False))
-
         elif cmd == "audit":
             stdout(json.dumps({
                 "type": "audit",
@@ -594,9 +533,9 @@ def run_server(
                 "success": bool(result.get("ok")),
                 "task": result.get("task"),
                 "text": (
-                    "已恢复未完成任务。"
+                    "Task resumed."
                     if result.get("ok")
-                    else result.get("error", "恢复任务失败")
+                    else result.get("error", "Failed to resume task.")
                 ),
             }, ensure_ascii=False))
 
@@ -609,12 +548,11 @@ def run_server(
                 "success": bool(result.get("ok")),
                 "task": None,
                 "text": (
-                    "已放弃未完成任务。"
+                    "Task abandoned."
                     if result.get("ok")
-                    else result.get("error", "放弃任务失败")
+                    else result.get("error", "Failed to abandon task.")
                 ),
             }, ensure_ascii=False))
-
         elif cmd == "skills":
             stdout(json.dumps({
                 "type": "skills",
@@ -703,6 +641,7 @@ def run_server(
 
             current_agent.close(preserve_task=True)
             current_agent = make_agent(model_key)
+            gateway.set_agent(current_agent)
             current_agent.messages = previous_messages
             current_agent.sync_memory_review_state()
             current_agent.refresh_context_estimate()
@@ -810,43 +749,56 @@ def _display_messages(agent: Agent) -> list[dict[str, str]]:
 
 
 def _format_memory_status(status: dict) -> str:
-    lines = []
+    lines = ["Memory status"]
     curated = str(status.get("curated") or "").strip()
-    lines.append("精选记忆")
-    lines.append(curated or "（暂无）")
+    if curated:
+        lines.append(curated)
+    else:
+        lines.append("No curated markdown memory yet.")
     lines.append("")
-    lines.append("记忆 Provider")
+    lines.append("Providers:")
     for provider in status.get("providers", []):
-        name = provider.get("name", "unknown")
+        name = str(provider.get("name", "unknown"))
         if not provider.get("available", False):
-            lines.append(f"- {name}: 不可用 · {provider.get('error', 'unknown error')}")
+            lines.append("- " + name + ": unavailable (" + str(provider.get("error", "unknown error")) + ")")
         elif name == "markdown":
             lines.append(
-                f"- markdown: 项目 {provider.get('memory_entries', 0)} 条 · "
-                f"用户 {provider.get('user_entries', 0)} 条"
+                "- markdown: "
+                + str(provider.get("memory_entries", 0))
+                + " memory entries, "
+                + str(provider.get("user_entries", 0))
+                + " user entries"
             )
         elif name == "local_vector":
             lines.append(
-                f"- local_vector: 当前工作区 {provider.get('records', 0)} 条 · "
-                f"模型 {provider.get('embedding_model', 'unknown')}"
+                "- local_vector: \u5f53\u524d\u5de5\u4f5c\u533a "
+                + str(provider.get("records", 0))
+                + " \u6761, model "
+                + str(provider.get("embedding_model", "unknown"))
             )
         else:
-            lines.append(f"- {name}: ready")
+            lines.append("- " + name + ": ready")
     return "\n".join(lines)
 
 
 def _format_cron_status(status: dict) -> str:
     if not status.get("enabled"):
-        return "Cron 未启用。"
+        return "Cron reminders are not available."
     tasks = status.get("tasks", [])
     if not tasks:
-        return "暂无定时提示。用 /cron-add <分钟> <提示> 创建。"
-    lines = [f"定时提示 · {len(tasks)} 个"]
+        return "No scheduled reminders. Use /cron-add <prompt> <minutes>."
+    lines = ["Scheduled reminders: " + str(len(tasks))]
     for task in tasks:
         next_run = _format_timestamp(task.get("next_run_at"))
         lines.append(
-            f"- {task.get('id', '')} · every {task.get('interval_minutes', '?')} min · "
-            f"next {next_run}\n  {task.get('prompt', '')}"
+            "- "
+            + str(task.get("id", ""))
+            + " 路 every "
+            + str(task.get("interval_minutes", "?"))
+            + " min 路 next "
+            + next_run
+            + "\n  "
+            + str(task.get("prompt", ""))
         )
     return "\n".join(lines)
 
@@ -854,66 +806,70 @@ def _format_cron_status(status: dict) -> str:
 def _format_cron_due(tasks: list[dict]) -> str:
     if not tasks:
         return ""
-    lines = ["定时提示到期:"]
+    lines = ["Scheduled reminders due:"]
     for task in tasks:
-        lines.append(f"- {task.get('prompt', '')}")
+        lines.append("- " + str(task.get("prompt", "")))
     return "\n".join(lines)
 
 
 def _format_task_status(task: dict | None) -> str:
     if not task:
-        return "当前没有任务计划。"
-    completed = sum(
-        step.get("status") == "completed" for step in task.get("steps", [])
-    )
+        return "No active task."
+    steps = task.get("steps", [])
+    completed = sum(step.get("status") == "completed" for step in steps)
     lines = [
-        f"任务: {task.get('objective', '')}",
-        f"状态: {task.get('status', 'unknown')} · {completed}/{len(task.get('steps', []))}",
+        "Task: " + str(task.get("objective", "")),
+        "Status: " + str(task.get("status", "unknown")) + " 路 " + str(completed) + "/" + str(len(steps)),
     ]
-    for step in task.get("steps", []):
+    for step in steps:
         icon = {
-            "completed": "✓",
-            "in_progress": "›",
-            "pending": "·",
-        }.get(step.get("status"), "?")
-        note = f" · {step['note']}" if step.get("note") else ""
-        lines.append(f"{icon} {step.get('step', '')}{note}")
+            "completed": "[x]",
+            "in_progress": "[>]",
+            "pending": "[ ]",
+        }.get(step.get("status"), "[?]")
+        note = " 路 " + str(step.get("note")) if step.get("note") else ""
+        lines.append(icon + " " + str(step.get("step", "")) + note)
     uncertain = task.get("uncertain_executions", [])
     if uncertain:
-        lines.append(f"注意: {len(uncertain)} 个中断工具调用结果不确定，继续前需要验证。")
+        lines.append("Uncertain executions: " + str(len(uncertain)))
     return "\n".join(lines)
 
 
 def _format_skill_usage_stats(stats: dict) -> str:
     if not stats.get("enabled"):
-        return "Skill 使用追踪未启用。"
+        return "Skill usage stats are not available."
     total_turns = int(stats.get("total_turns", 0) or 0)
     total_events = int(stats.get("total_events", 0) or 0)
     load_rate = stats.get("skill_load_rate")
     success_rate = stats.get("success_rate")
+    load_text = "n/a" if load_rate is None else format(load_rate, ".1%")
+    success_text = "n/a" if success_rate is None else format(success_rate, ".1%")
     lines = [
-        f"Skill 使用统计 · {total_turns} turns · {total_events} events",
-        (
-            "加载率 " + (f"{load_rate:.1%}" if load_rate is not None else "暂无")
-            + " · 成功率 "
-            + (f"{success_rate:.1%}" if success_rate is not None else "暂无")
-        ),
+        "Skill usage: " + str(total_turns) + " turns, " + str(total_events) + " events",
+        "Load rate: " + load_text + " 路 success rate: " + success_text,
     ]
     for item in stats.get("skills", []):
         lines.append(
-            f"- {item.get('skill_name', '?')}: "
-            f"view {item.get('views', 0)} · template {item.get('renders', 0)} · "
-            f"script {item.get('script_runs', 0)} · failed {item.get('failures', 0)}"
+            "- "
+            + str(item.get("skill_name", "?"))
+            + ": view "
+            + str(item.get("views", 0))
+            + " 路 template "
+            + str(item.get("renders", 0))
+            + " 路 script "
+            + str(item.get("script_runs", 0))
+            + " 路 failed "
+            + str(item.get("failures", 0))
         )
     if not stats.get("skills"):
-        lines.append("暂无 Skill 调用记录。")
+        lines.append("No skill usage has been recorded yet.")
     return "\n".join(lines)
 
 
 def _format_memory_search(results: list[dict]) -> str:
     if not results:
-        return "没有找到相关向量记忆。"
-    lines = [f"找到 {len(results)} 条相关记忆"]
+        return "No memory results found."
+    lines = ["Memory search results: " + str(len(results))]
     for result in results:
         content = " ".join(str(result.get("content", "")).split())
         if len(content) > 300:
@@ -921,51 +877,67 @@ def _format_memory_search(results: list[dict]) -> str:
         score = float(result.get("score", 0) or 0)
         created_at = str(result.get("created_at", ""))[:19].replace("T", " ")
         lines.append(
-            f"#{result.get('id', '?')} · {score:.2f} · {created_at or 'unknown time'}\n"
-            f"  {content}"
+            "#"
+            + str(result.get("id", "?"))
+            + " 路 "
+            + format(score, ".2f")
+            + " 路 "
+            + (created_at or "unknown time")
+            + "\n  "
+            + content
         )
     return "\n".join(lines)
 
 
 def _format_sessions(sessions: list[dict]) -> str:
     if not sessions:
-        return "暂无历史会话。"
-    lines = [f"历史会话 · {len(sessions)} 条"]
+        return "No saved sessions yet."
+    lines = ["Saved sessions: " + str(len(sessions))]
     for index, session in enumerate(sessions, 1):
         title = str(session.get("title") or "(untitled)").strip()
         if len(title) > 60:
             title = title[:60] + "..."
         lines.append(
-            f"[{index}] {session.get('id', '')}\n"
-            f"    {title}\n"
-            f"    {session.get('message_count', 0)} messages · "
-            f"{_format_timestamp(session.get('updated_at'))}"
+            "["
+            + str(index)
+            + "] "
+            + str(session.get("id", ""))
+            + "\n    "
+            + title
+            + "\n    "
+            + str(session.get("message_count", 0))
+            + " messages 路 "
+            + _format_timestamp(session.get("updated_at"))
         )
     lines.append("")
-    lines.append("使用 /session-load <id> 恢复某个会话。")
+    lines.append("Use /session-load <id> to open a session.")
     return "\n".join(lines)
 
 
 def _format_session_search(results: list[dict]) -> str:
     if not results:
-        return "没有找到相关历史会话。"
-    lines = [f"历史搜索 · 找到 {len(results)} 条"]
+        return "No session results found."
+    lines = ["Session search results: " + str(len(results))]
     for result in results:
         snippet = " ".join(str(result.get("snippet") or result.get("content") or "").split())
         if len(snippet) > 260:
             snippet = snippet[:260] + "..."
         title = str(result.get("title") or "(untitled)").strip()
-        role = result.get("role", "?")
+        role = str(result.get("role", "?"))
         lines.append(
-            f"{result.get('session_id', '')} · {role} · {_format_timestamp(result.get('created_at'))}\n"
-            f"  {title}\n"
-            f"  {snippet}"
+            str(result.get("session_id", ""))
+            + " 路 "
+            + role
+            + " 路 "
+            + _format_timestamp(result.get("created_at"))
+            + "\n  "
+            + title
+            + "\n  "
+            + snippet
         )
     lines.append("")
-    lines.append("使用 /session-load <session_id> 恢复完整会话。")
+    lines.append("Use /session-load <session_id> to open a session.")
     return "\n".join(lines)
-
-
 def _format_timestamp(value) -> str:
     try:
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(value)))

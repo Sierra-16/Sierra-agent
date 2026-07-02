@@ -18,7 +18,7 @@
 
     <div ref="scrollEl" class="thread-scroll">
       <div class="thread-inner">
-        <div class="empty-hero" v-if="messages.length === 0">
+        <div v-if="messages.length === 0" class="empty-hero">
           <h3>今天要让 Sierra 做什么？</h3>
         </div>
 
@@ -59,11 +59,7 @@
     </div>
 
     <section class="composer-dock" :class="{ active: showActivity || completionOpen }">
-      <div
-        v-if="showActivity && activeActivity"
-        class="process-panel"
-        :class="processClasses"
-      >
+      <div v-if="showActivity && activeActivity" class="process-panel" :class="processClasses">
         <SierraOrnaments variant="process" :active="activeActivity.status === 'active'" />
 
         <div class="process-portrait">
@@ -77,7 +73,7 @@
         <div class="process-main">
           <div class="process-kicker">
             <component :is="activeActivityIcon" :size="14" />
-            <span>状态</span>
+            <span>{{ processKicker }}</span>
           </div>
           <div class="process-title-row">
             <h4>{{ processTitle }}</h4>
@@ -105,7 +101,7 @@
         </div>
       </div>
 
-      <TransitionGroup name="activity-list" tag="div" class="status-stack" v-if="stackActivityEvents.length">
+      <TransitionGroup v-if="stackActivityEvents.length" name="activity-list" tag="div" class="status-stack">
         <article
           v-for="event in stackActivityEvents"
           :key="event.id"
@@ -153,16 +149,8 @@
                   <small v-if="option.description">{{ option.description }}</small>
                 </button>
               </div>
-              <form
-                v-if="event.allowFreeText"
-                class="input-inline"
-                @submit.prevent="submitInputText(event)"
-              >
-                <input
-                  v-model="freeText[event.id]"
-                  type="text"
-                  placeholder="补充一句..."
-                />
+              <form v-if="event.allowFreeText" class="input-inline" @submit.prevent="submitInputText(event)">
+                <input v-model="freeText[event.id]" type="text" placeholder="补充一句..." />
                 <button type="submit">发送</button>
               </form>
             </div>
@@ -197,7 +185,7 @@
         </article>
       </TransitionGroup>
 
-      <div class="reference-chips" v-if="referenceChips.length">
+      <div v-if="referenceChips.length" class="reference-chips">
         <span v-for="chip in referenceChips" :key="chip" class="reference-chip">
           <AtSign :size="12" />
           {{ chip }}
@@ -221,7 +209,7 @@
           <Link2 :size="15" />
           <span>URL</span>
         </button>
-        <button type="button" class="composer-tool-button" title="Upload file" :disabled="uploading" @click="triggerUpload">
+        <button type="button" class="composer-tool-button" title="上传文件" :disabled="uploading" @click="triggerUpload">
           <Upload :size="15" />
           <span>{{ uploading ? "上传中" : "上传" }}</span>
         </button>
@@ -234,7 +222,7 @@
         />
         <span v-if="uploadState" class="upload-state">{{ uploadState }}</span>
         <span class="composer-hint">
-          输入 <kbd>/</kbd> 选命令，输入 <kbd>@</kbd> 附加上下文
+          <kbd>/</kbd> 命令 · <kbd>@</kbd> 引用上下文
         </span>
       </div>
 
@@ -243,7 +231,7 @@
           <span>{{ completionMode === "slash" ? "命令" : "上下文引用" }}</span>
           <small>{{ referenceLoading ? "搜索中..." : "↑↓ 选择 · Enter 插入 · Esc 关闭" }}</small>
         </div>
-        <div class="completion-list" v-if="completionItems.length">
+        <div v-if="completionItems.length" class="completion-list">
           <button
             v-for="(item, index) in completionItems"
             :key="`${item.kind}:${item.value}:${index}`"
@@ -263,7 +251,7 @@
             <kbd v-if="index === selectedCompletionIndex">Enter</kbd>
           </button>
         </div>
-        <div class="completion-empty" v-else>
+        <div v-else class="completion-empty">
           没找到匹配项。你也可以继续手动输入。
         </div>
       </div>
@@ -280,6 +268,16 @@
           @keydown="handleKeydown"
           @keyup="updateCompletion"
         ></textarea>
+        <button
+          v-if="sending"
+          class="stop-button"
+          type="button"
+          title="停止当前处理"
+          @click="$emit('cancel-chat')"
+        >
+          <Square :size="15" />
+          停止
+        </button>
         <button class="send-button" type="submit" :disabled="sending || !draft.trim()">
           <Send :size="17" />
           发送
@@ -305,6 +303,7 @@ import {
   Send,
   ShieldAlert,
   Sparkles,
+  Square,
   Upload,
   UserRound,
   WandSparkles,
@@ -337,11 +336,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: "refresh"): void;
   (event: "send", value: string): void;
+  (event: "cancel-chat"): void;
   (event: "approve-tool", id: string, decision: "once" | "session" | "deny"): void;
   (
     event: "respond-user-input",
     id: string,
-    payload: { value?: string; label?: string; free_text?: string; cancelled?: boolean }
+    payload: { value?: string; label?: string; free_text?: boolean; cancelled?: boolean }
   ): void;
 }>();
 
@@ -404,12 +404,26 @@ const activeActivity = computed(() => {
     visibleActivityEvents.value[visibleActivityEvents.value.length - 1]
   );
 });
-const activeActivityIcon = computed(() => {
-  return activeActivity.value ? iconFor(activeActivity.value) : Sparkles;
-});
+const activeActivityIcon = computed(() => activeActivity.value ? iconFor(activeActivity.value) : Sparkles);
 const processClasses = computed(() => {
   const event = activeActivity.value;
   return event ? [event.type, event.status, riskClass(event)] : [];
+});
+const processKicker = computed(() => {
+  const event = activeActivity.value;
+  if (!event) {
+    return "处理";
+  }
+  if (event.type === "tool") {
+    return "工具";
+  }
+  if (event.type === "approval") {
+    return "确认";
+  }
+  if (event.type === "user-input") {
+    return "等待";
+  }
+  return "处理";
 });
 const processTitle = computed(() => {
   const event = activeActivity.value;
@@ -444,49 +458,31 @@ const processTitle = computed(() => {
 });
 const processDetail = computed(() => {
   const event = activeActivity.value;
-  if (!event) {
+  if (!event || event.type === "thinking") {
     return "";
   }
-  if (event.type === "thinking") {
-    return "";
-  }
-  if (event.reason) {
-    return event.reason;
-  }
-  if (event.detail) {
-    return event.detail;
-  }
-  if (event.toolName) {
-    return "";
-  }
-  if (event.type === "approval") {
-    return "请在下方选择允许或拒绝。";
-  }
-  if (event.type === "user-input") {
-    return "请补充信息后继续。";
-  }
-  return "";
+  return event.reason || event.detail || "";
 });
 const processStatusText = computed(() => {
   const status = activeActivity.value?.status;
   if (status === "done") {
-    return "已完成";
+    return "完成";
   }
   if (status === "error") {
-    return "需处理";
+    return "待处理";
   }
   return "进行中";
 });
 const processSideText = computed(() => {
   const event = activeActivity.value;
   if (!event) {
-    return "整理思路";
+    return "处理中";
   }
   if (event.type === "approval") {
-    return "等待确认";
+    return "等你确认";
   }
   if (event.type === "user-input") {
-    return "等待回复";
+    return "等你回复";
   }
   if (event.type === "tool") {
     return "工具调用";
@@ -497,7 +493,7 @@ const processSideText = computed(() => {
   if (event.type === "context" || event.type === "reference") {
     return "上下文";
   }
-  return "思考中";
+  return "思考";
 });
 const activityPhases = computed(() => {
   const events = visibleActivityEvents.value;
@@ -508,17 +504,12 @@ const activityPhases = computed(() => {
       done: related.length > 0 && related.every((event) => event.status !== "active")
     };
   };
-  const thinking = phaseState(["thinking"]);
-  const context = phaseState(["context", "reference", "history"]);
-  const tool = phaseState(["tool"]);
-  const approval = phaseState(["approval", "user-input"]);
-  const memory = phaseState(["memory"]);
   return [
-    { key: "thinking", label: "思考", icon: WandSparkles, ...thinking },
-    { key: "context", label: "上下文", icon: ScrollText, ...context },
-    { key: "tool", label: "工具", icon: Wrench, ...tool },
-    { key: "approval", label: "确认", icon: ShieldAlert, ...approval },
-    { key: "memory", label: "记忆", icon: Database, ...memory }
+    { key: "thinking", label: "思考", icon: WandSparkles, ...phaseState(["thinking"]) },
+    { key: "context", label: "上下文", icon: ScrollText, ...phaseState(["context", "reference", "history"]) },
+    { key: "tool", label: "工具", icon: Wrench, ...phaseState(["tool"]) },
+    { key: "approval", label: "确认", icon: ShieldAlert, ...phaseState(["approval", "user-input"]) },
+    { key: "memory", label: "记忆", icon: Database, ...phaseState(["memory"]) }
   ];
 });
 
@@ -553,16 +544,12 @@ function submitDraft() {
 }
 
 function approve(event: ChatActivityEvent, decision: "once" | "session" | "deny") {
-  if (!event.approvalId) {
-    return;
+  if (event.approvalId) {
+    emit("approve-tool", event.approvalId, decision);
   }
-  emit("approve-tool", event.approvalId, decision);
 }
 
-function submitInputOption(
-  event: ChatActivityEvent,
-  option: { label: string; value?: string; description?: string }
-) {
+function submitInputOption(event: ChatActivityEvent, option: { label: string; value?: string; description?: string }) {
   if (!event.inputId) {
     return;
   }
@@ -584,17 +571,16 @@ function submitInputText(event: ChatActivityEvent) {
   emit("respond-user-input", event.inputId, {
     value,
     label: value,
-    free_text: value,
+    free_text: true,
     cancelled: false
   });
   freeText.value[event.id] = "";
 }
 
 function cancelInput(event: ChatActivityEvent) {
-  if (!event.inputId) {
-    return;
+  if (event.inputId) {
+    emit("respond-user-input", event.inputId, { cancelled: true });
   }
-  emit("respond-user-input", event.inputId, { cancelled: true });
 }
 
 function insertReferencePrefix(prefix: string) {
@@ -645,10 +631,7 @@ async function handleUploadFile(event: Event) {
     const response = await fetch("/api/uploads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: file.name,
-        content_base64: contentBase64
-      })
+      body: JSON.stringify({ filename: file.name, content_base64: contentBase64 })
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {
