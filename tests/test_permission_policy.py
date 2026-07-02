@@ -17,6 +17,11 @@ class PermissionPolicyTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "ask")
 
+    def test_vision_tool_requires_approval_when_marked_medium(self):
+        decision = self.policy.decide("vision_analyze", "medium")
+
+        self.assertEqual(decision.action, "ask")
+
     def test_high_risk_requires_approval(self):
         decision = self.policy.decide("powershell", "high")
 

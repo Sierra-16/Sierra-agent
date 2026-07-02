@@ -46,6 +46,7 @@
       "powershell",
       "terminal",
       "execute_code",
+      "vision_analyze",
       "browser_click",
       "browser_type",
       "browser_press",
@@ -125,6 +126,60 @@
     "recent_tool_result_max_chars": 12000,
     "recent_tool_result_message_count": 8
   },
+  "auxiliary": {
+    "vision": {
+      "enabled": false,
+      "provider": "auto",
+      "credentials_model": "qwen_vl",
+      "model": "qwen-vl-max",
+      "timeout": 30,
+      "max_tokens": 2048,
+      "max_image_bytes": 20971520
+    },
+    "web_extract": {
+      "enabled": false,
+      "provider": "main",
+      "timeout": 30,
+      "max_tokens": 2048
+    },
+    "compression": {
+      "enabled": false,
+      "provider": "main",
+      "timeout": 30,
+      "max_tokens": 2048
+    },
+    "title": {
+      "enabled": false,
+      "provider": "main",
+      "timeout": 20,
+      "max_tokens": 256
+    },
+    "session_search": {
+      "enabled": false,
+      "provider": "main",
+      "timeout": 30,
+      "max_tokens": 1024
+    },
+    "tts": {
+      "enabled": false,
+      "provider": "edge",
+      "voice": "zh-CN-XiaoxiaoNeural",
+      "format": "mp3"
+    },
+    "stt": {
+      "enabled": false,
+      "provider": "local",
+      "model": "base",
+      "language": "auto"
+    },
+    "image_generation": {
+      "enabled": false,
+      "provider": "openai_compatible",
+      "credentials_model": "qwen",
+      "model": "wanx2.1-t2i-turbo",
+      "timeout": 60
+    }
+  },
   "skills": {
     "disabled": [],
     "compact_categories": [],
@@ -145,7 +200,8 @@
       "api_key": "YOUR_DEEPSEEK_API_KEY",
       "max_tokens": 8192,
       "temperature": 0.7,
-      "context_window": 128000
+      "context_window": 128000,
+      "supports_vision": false
     },
     "qwen": {
       "name": "qwen-plus",
@@ -153,7 +209,17 @@
       "api_key": "YOUR_QWEN_API_KEY",
       "max_tokens": 8192,
       "temperature": 0.7,
-      "context_window": 128000
+      "context_window": 128000,
+      "supports_vision": false
+    },
+    "qwen_vl": {
+      "name": "qwen-vl-max",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "YOUR_QWEN_API_KEY",
+      "max_tokens": 8192,
+      "temperature": 0.3,
+      "context_window": 128000,
+      "supports_vision": true
     }
   },
   "active_model": "deepseek",

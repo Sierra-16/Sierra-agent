@@ -458,6 +458,73 @@ class DashboardApiTest(unittest.TestCase):
             self.assertEqual(payload["reference"], "@file:`uploads/brief.pdf` ")
             self.assertEqual((workspace / "uploads" / "brief.pdf").read_bytes(), b"demo pdf bytes")
 
+    def test_upload_endpoint_marks_image_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            agent = FakeAgent()
+            agent.workspace = str(workspace)
+            app = create_dashboard_app(
+                agent,
+                config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+                sierra_dir=".",
+                static_dir="missing-dist",
+            )
+            client = TestClient(app)
+
+            response = client.post(
+                "/api/uploads",
+                json={
+                    "filename": "forest.png",
+                    "content_base64": base64.b64encode(b"\x89PNG\r\n\x1a\n").decode("ascii"),
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["kind"], "image")
+            self.assertEqual(payload["mime_type"], "image/png")
+
+    def test_model_config_saves_vision_capability_flag(self):
+        config = {
+            "active_model": "base",
+            "models": {
+                "base": {
+                    "name": "base-model",
+                    "base_url": "https://base.example/v1",
+                    "api_key": "base-key",
+                }
+            },
+        }
+        app = create_dashboard_app(
+            FakeAgent(),
+            config=config,
+            sierra_dir=".",
+            static_dir="missing-dist",
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/config/models",
+            json={
+                "key": "vision",
+                "name": "vision-model",
+                "base_url": "https://vision.example/v1",
+                "api_key": "vision-key",
+                "max_tokens": 4096,
+                "temperature": 0.2,
+                "context_window": 128000,
+                "supports_vision": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(config["models"]["vision"]["supports_vision"])
+        models = response.json()["models"]
+        vision = next(model for model in models if model["key"] == "vision")
+        self.assertTrue(vision["supports_vision"])
+
 
 if __name__ == "__main__":
     unittest.main()

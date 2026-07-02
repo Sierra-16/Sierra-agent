@@ -25,6 +25,7 @@ CORE_TOOLSETS = {
     "session",
     "skills",
     "terminal",
+    "vision",
     "web",
 }
 

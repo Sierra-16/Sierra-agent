@@ -20,6 +20,7 @@ from .skills.prompt_index import SkillPromptIndex
 from .skills.usage_store import SkillUsageStore
 from .tools.skill_view_tool import configure_skill_tools
 from .tools.session_tool import configure_session_tools
+from .tools.vision_tool import configure_vision_tool
 from .mcp import MCPManager
 from .safety import SafetyGate
 from .permission_policy import PermissionPolicy
@@ -39,6 +40,7 @@ from .cron import CronStore
 from .skill_suggestions import suggest_skill_from_turn
 from .tasks import TaskCheckpointStore, TaskManager
 from .token_utils import estimate_tokens
+from .auxiliary_config import auxiliary_status
 
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,7 @@ class Agent:
         cron_config=None,
         checkpoint_config=None,
         tools_config=None,
+        auxiliary_config=None,
         workspace=None,
         sierra_dir=None,
     ):
@@ -125,11 +128,13 @@ class Agent:
         self.safety = SafetyGate()
         self.permission_policy = PermissionPolicy(permission_config)
         self.background_jobs = BackgroundJobQueue.from_config(background_config)
+        self.auxiliary_config = auxiliary_config if isinstance(auxiliary_config, dict) else {}
         self.sierra_dir = os.path.abspath(
             sierra_dir or os.path.join(os.path.dirname(__file__), "..")
         )
         self.workspace = os.path.abspath(workspace or ".")
         set_tool_workspace(self.workspace)
+        configure_vision_tool(self.workspace, self.auxiliary_config.get("vision", {}))
         self.audit = AuditLogger.from_config(
             audit_config,
             base_dir=self.sierra_dir,
@@ -500,6 +505,7 @@ class Agent:
         self.workspace = os.path.abspath(workspace or ".")
         set_tool_workspace(self.workspace)
         configure_skill_tools(self.workspace, self.skill_index)
+        configure_vision_tool(self.workspace, self.auxiliary_config.get("vision", {}))
         if getattr(self, "mcp", None) is not None:
             self.mcp.workspace = self.workspace
         if getattr(self, "task_manager", None) is not None:
@@ -1203,6 +1209,9 @@ class Agent:
 
     def mcp_status(self):
         return self.mcp.status()
+
+    def auxiliary_status(self):
+        return auxiliary_status(self.auxiliary_config)
 
     def audit_recent(self, limit=20):
         return self.audit.recent(limit)

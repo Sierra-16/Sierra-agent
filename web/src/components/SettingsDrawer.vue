@@ -148,6 +148,13 @@
                           <input v-model.number="modelForm.context_window" type="number" min="1" />
                         </label>
                       </div>
+                      <label class="settings-toggle">
+                        <input v-model="modelForm.supports_vision" type="checkbox" />
+                        <span>
+                          <strong>支持图片理解</strong>
+                          <small>勾选后，Sierra 会优先用这个主模型分析图片。</small>
+                        </span>
+                      </label>
                       <div class="settings-actions align-right">
                         <button type="submit">保存配置</button>
                         <button v-if="modelForm.key" type="button" @click="switchModel(modelForm.key)">切换到此模型</button>
@@ -557,7 +564,8 @@ const modelForm = ref({
   api_key: "",
   max_tokens: 4096,
   temperature: 0.7,
-  context_window: 256000
+  context_window: 256000,
+  supports_vision: false
 });
 
 const mcpConfigs = ref<any[]>([]);
@@ -871,7 +879,8 @@ function selectModel(model: any) {
     api_key: "",
     max_tokens: Number(model.max_tokens || 4096),
     temperature: Number(model.temperature ?? 0.7),
-    context_window: Number(model.context_window || 256000)
+    context_window: Number(model.context_window || 256000),
+    supports_vision: Boolean(model.supports_vision)
   };
   settingsNotice.value = "";
 }
@@ -885,7 +894,8 @@ function newModel() {
     api_key: "",
     max_tokens: 4096,
     temperature: 0.7,
-    context_window: 256000
+    context_window: 256000,
+    supports_vision: false
   };
   settingsNotice.value = "";
 }

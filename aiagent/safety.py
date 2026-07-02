@@ -166,6 +166,12 @@ class SafetyGate:
                 return ToolRisk("low", "只读取或等待后台进程状态")
             return ToolRisk("high", "该工具会控制后台进程状态")
 
+        if normalized == "vision_analyze":
+            return ToolRisk(
+                "medium",
+                "该工具会把图片发送给配置的视觉模型进行分析",
+            )
+
         if normalized == "browser_console":
             if str(arguments.get("expression") or "").strip():
                 return ToolRisk("high", "该工具会在浏览器页面中执行 JavaScript")

@@ -217,7 +217,7 @@
           ref="fileInputRef"
           class="upload-input"
           type="file"
-          accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.rtf,.txt,.md,.json,.csv"
+          accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.rtf,.txt,.md,.json,.csv"
           @change="handleUploadFile"
         />
         <span v-if="uploadState" class="upload-state">{{ uploadState }}</span>

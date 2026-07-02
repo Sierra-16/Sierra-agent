@@ -1,5 +1,6 @@
 import copy
-import os
+
+from ..auxiliary_config import resolve_model_credentials
 
 
 def resolve_memory_config(app_config: dict) -> dict:
@@ -13,14 +14,9 @@ def resolve_memory_config(app_config: dict) -> dict:
     if not isinstance(embedding_config, dict):
         return memory_config
 
-    env_name = embedding_config.get("api_key_env")
-    if env_name and os.environ.get(env_name):
-        embedding_config["api_key"] = os.environ[env_name]
-
-    credentials_model = embedding_config.get("credentials_model")
-    model_config = app_config.get("models", {}).get(credentials_model, {})
-    if isinstance(model_config, dict):
-        embedding_config.setdefault("base_url", model_config.get("base_url", ""))
-        embedding_config.setdefault("api_key", model_config.get("api_key", ""))
+    vector_config["embedding"] = resolve_model_credentials(
+        app_config,
+        embedding_config,
+    )
 
     return memory_config

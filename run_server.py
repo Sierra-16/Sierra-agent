@@ -8,6 +8,7 @@ ensure_utf8_stdio()
 from aiagent.server import run_server
 from aiagent.agent import Agent
 from aiagent.memory.config import resolve_memory_config
+from aiagent.auxiliary_config import resolve_auxiliary_config
 from aiagent.config_validation import (
     StartupConfigError,
     format_config_issues,
@@ -53,6 +54,7 @@ def make_agent(model_key):
         cron_config=config.get("cron", {}),
         checkpoint_config=config.get("checkpoints", {}),
         tools_config=config.get("tools", {}),
+        auxiliary_config=resolve_auxiliary_config(config),
         workspace=os.getcwd(),
         sierra_dir=sierra_dir,
         permission_config=config.get("permissions", {}),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import mimetypes
 import os
 import queue
 import re
@@ -18,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config_validation import StartupConfigError, format_config_issues, validate_model_config
+from .auxiliary_config import auxiliary_status
 from .gateway import GatewayRuntime, sanitize_gateway_event
 from .safety import sanitize_text
 from .tools.registry import BRIDGE_TOOL_NAMES
@@ -66,6 +68,7 @@ class ModelConfigRequest(BaseModel):
     max_tokens: int = Field(default=4096, ge=1, le=2_000_000)
     temperature: float = Field(default=0.7, ge=0, le=2)
     context_window: int = Field(default=256_000, ge=1, le=10_000_000)
+    supports_vision: bool = False
 
 
 class MCPServerConfigRequest(BaseModel):
@@ -304,10 +307,14 @@ def create_dashboard_app(
             return {"ok": False, "error": "invalid upload path"}
         target.write_bytes(raw)
         relative_path = target.relative_to(workspace).as_posix()
+        mime_type, _encoding = mimetypes.guess_type(str(target))
+        kind = "image" if str(mime_type or "").lower().startswith("image/") else "file"
         return {
             "ok": True,
             "file_path": str(target),
             "relative_path": relative_path,
+            "kind": kind,
+            "mime_type": mime_type or "",
             "size": len(raw),
             "reference": f"@file:{_quote_reference_value(relative_path)} ",
         }
@@ -839,6 +846,7 @@ def _models_from_config(config: dict[str, Any], *, include_details: bool = False
             "key": key,
             "name": value.get("name", key),
             "active": key == active,
+            "supports_vision": bool(value.get("supports_vision", False)),
         }
         if include_details:
             item.update({
@@ -903,6 +911,7 @@ def _save_model_config(app: FastAPI, request: ModelConfigRequest) -> dict[str, A
         "max_tokens": int(request.max_tokens),
         "temperature": float(request.temperature),
         "context_window": int(request.context_window),
+        "supports_vision": bool(request.supports_vision),
     }
     if not config.get("active_model"):
         config["active_model"] = model_key
@@ -1647,6 +1656,7 @@ def build_dashboard_payload(
         "background": _background(agent),
         "cron": _cron(agent),
         "skills": _skills(agent),
+        "auxiliary": _auxiliary(agent),
         "context": _context(agent),
         "audit": _audit(agent),
         "sierra_frame": _sierra_frame(root_dir),
@@ -1663,6 +1673,7 @@ def _identity(agent: Any, config: dict[str, Any]) -> dict[str, Any]:
             "key": key,
             "name": value.get("name", key),
             "active": key == active_key,
+            "supports_vision": bool(value.get("supports_vision", False)),
         })
     return {
         "name": "Sierra AI Agent",
@@ -1781,6 +1792,14 @@ def _memory(agent: Any) -> dict[str, Any]:
 def _mcp(agent: Any) -> dict[str, Any]:
     status = _safe_call(agent, "mcp_status", default={})
     return status if isinstance(status, dict) else {}
+
+
+def _auxiliary(agent: Any) -> dict[str, Any]:
+    status = _safe_call(agent, "auxiliary_status", default={})
+    if isinstance(status, dict):
+        return status
+    config = getattr(agent, "auxiliary_config", {})
+    return auxiliary_status(config if isinstance(config, dict) else {})
 
 
 def _tasks(agent: Any) -> dict[str, Any]:

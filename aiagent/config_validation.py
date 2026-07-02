@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .auxiliary_config import model_supports_vision
+
 
 ENV_REF_RE = re.compile(r"\$\{env:([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -81,6 +83,7 @@ def validate_startup_config(config: dict[str, Any]) -> None:
             _validate_model(config, active_model, issues)
 
     _validate_search(config, issues)
+    _validate_auxiliary(config, issues)
     _validate_vector_memory(config, issues)
     _validate_mcp_servers(config, issues)
 
@@ -162,6 +165,156 @@ def _validate_search(config: dict[str, Any], issues: list[ConfigIssue]) -> None:
             f"{backend} 搜索 API key 未配置。",
             issues,
         )
+
+
+def _validate_auxiliary(config: dict[str, Any], issues: list[ConfigIssue]) -> None:
+    auxiliary = config.get("auxiliary")
+    if auxiliary is None:
+        return
+    if not isinstance(auxiliary, dict):
+        issues.append(ConfigIssue("auxiliary", "辅助能力配置必须是 object。"))
+        return
+
+    for name, capability in auxiliary.items():
+        path = f"auxiliary.{name}"
+        if not isinstance(capability, dict):
+            issues.append(ConfigIssue(path, "辅助能力配置必须是 object。"))
+            continue
+
+        if not _config_bool(capability.get("enabled"), default=False):
+            continue
+
+        provider = str(capability.get("provider") or "main").strip().lower()
+        if not provider:
+            issues.append(ConfigIssue(f"{path}.provider", "provider 不能为空。"))
+            continue
+
+        if not _auxiliary_uses_model_credentials(provider, capability):
+            _validate_optional_secret_reference(capability, path, issues)
+            continue
+
+        if str(name) == "vision" and provider == "auto":
+            active_model_key = str(config.get("active_model") or "").strip()
+            active_model = (
+                (config.get("models") or {}).get(active_model_key)
+                if isinstance(config.get("models"), dict)
+                else {}
+            )
+            if model_supports_vision(active_model if isinstance(active_model, dict) else {}):
+                continue
+            capability = dict(capability)
+            fallback = capability.get("fallback")
+            if isinstance(fallback, dict):
+                capability = {**capability, **fallback}
+                capability.pop("fallback", None)
+            capability["provider"] = str(capability.get("fallback_provider") or "openai_compatible")
+            provider = str(capability.get("provider") or "openai_compatible").strip().lower()
+
+        credentials_model_key = str(capability.get("credentials_model") or "").strip()
+        if provider in {"auto", "main", "model"} and not credentials_model_key:
+            credentials_model_key = str(config.get("active_model") or "").strip()
+
+        credentials_model = {}
+        if credentials_model_key:
+            models = config.get("models", {})
+            if isinstance(models, dict):
+                credentials_model = models.get(credentials_model_key) or {}
+            if not isinstance(credentials_model, dict) or not credentials_model:
+                issues.append(
+                    ConfigIssue(
+                        f"{path}.credentials_model",
+                        f"凭据模型 '{credentials_model_key}' 不存在。",
+                    )
+                )
+                credentials_model = {}
+
+        if provider in {"openai_compatible", "custom"}:
+            _require_text(
+                capability.get("model") or credentials_model.get("name"),
+                f"{path}.model",
+                "辅助模型名称不能为空。",
+                issues,
+            )
+
+        base_url = capability.get("base_url") or credentials_model.get("base_url")
+        _require_text(
+            base_url,
+            f"{path}.base_url",
+            "辅助能力 base_url 不能为空。",
+            issues,
+            hint="可以直接配置 base_url，或通过 credentials_model 复用 models 中的连接信息。",
+        )
+
+        _validate_auxiliary_api_key(config, capability, credentials_model, credentials_model_key, path, issues)
+
+
+def _validate_auxiliary_api_key(
+    config: dict[str, Any],
+    capability: dict[str, Any],
+    credentials_model: dict[str, Any],
+    credentials_model_key: str,
+    path: str,
+    issues: list[ConfigIssue],
+) -> None:
+    key_sources = [
+        (f"{path}.api_key", capability.get("api_key")),
+    ]
+    env_name = str(capability.get("api_key_env") or "").strip()
+    if env_name:
+        key_sources.append((f"env.{env_name}", os.environ.get(env_name)))
+    if credentials_model:
+        key_sources.append((
+            f"models.{credentials_model_key}.api_key",
+            credentials_model.get("api_key"),
+        ))
+    elif not capability.get("credentials_model") and config.get("active_model"):
+        active = str(config.get("active_model") or "")
+        model = (config.get("models") or {}).get(active) if isinstance(config.get("models"), dict) else {}
+        if isinstance(model, dict):
+            key_sources.append((f"models.{active}.api_key", model.get("api_key")))
+
+    has_valid_key = False
+    for source_path, value in key_sources:
+        if _secret_is_present(value):
+            has_valid_key = True
+            break
+        if value:
+            _append_secret_issue(value, source_path, "辅助能力 API key 未配置。", issues)
+
+    if not has_valid_key:
+        issues.append(
+            ConfigIssue(
+                f"{path}.api_key",
+                "辅助能力 API key 未配置。",
+                "配置 api_key、api_key_env，或 credentials_model 指向一个已配置 API key 的模型。",
+            )
+        )
+
+
+def _validate_optional_secret_reference(
+    capability: dict[str, Any],
+    path: str,
+    issues: list[ConfigIssue],
+) -> None:
+    if capability.get("api_key"):
+        _require_secret(capability.get("api_key"), f"{path}.api_key", "辅助能力 API key 未配置。", issues)
+    env_name = str(capability.get("api_key_env") or "").strip()
+    if env_name and not os.environ.get(env_name):
+        issues.append(
+            ConfigIssue(
+                f"{path}.api_key_env",
+                f"引用的环境变量未设置：{env_name}。",
+                "先设置环境变量，或关闭该能力。",
+            )
+        )
+
+
+def _auxiliary_uses_model_credentials(provider: str, capability: dict[str, Any]) -> bool:
+    return (
+        provider in {"auto", "main", "model", "openai_compatible", "custom"}
+        or bool(capability.get("credentials_model"))
+        or bool(capability.get("base_url"))
+    )
 
 
 def _validate_vector_memory(config: dict[str, Any], issues: list[ConfigIssue]) -> None:
@@ -319,6 +472,20 @@ def _require_secret(
     if _secret_is_present(value):
         return
     _append_secret_issue(value, path, message, issues)
+
+
+def _config_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return bool(value)
 
 
 def _append_secret_issue(value: Any, path: str, message: str, issues: list[ConfigIssue]) -> None:

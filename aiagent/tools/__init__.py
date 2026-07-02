@@ -11,6 +11,7 @@ from . import web_fetch_tool
 from . import web_extract_tool
 from . import web_search_tool
 from . import browser_tool
+from . import vision_tool
 from . import memory_tool
 from . import session_tool
 from . import git_tool

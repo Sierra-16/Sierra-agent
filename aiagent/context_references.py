@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from .document_extract import extract_document_file, is_supported_document_path
+from .vision import is_supported_image_path
 
 
 _QUOTED_REFERENCE_VALUE = r'(?:`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\')'
@@ -177,6 +178,16 @@ def _expand_file_reference(ref: ContextReference, workspace: Path) -> tuple[str 
     if _is_binary_file(path):
         if is_supported_document_path(path):
             return _expand_document_file_reference(ref, path)
+        if is_supported_image_path(path):
+            return None, _reference_block(
+                ref,
+                (
+                    f"Image: {path}\n"
+                    "Image bytes are not attached as text. Use the vision_analyze tool "
+                    f"with image_path={str(path)!r} when visual inspection is needed."
+                ),
+                language="text",
+            )
         return None, _reference_block(
             ref,
             f"File: {path}\nBinary or non-text file; content not attached.",
