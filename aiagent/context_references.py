@@ -183,8 +183,10 @@ def _expand_file_reference(ref: ContextReference, workspace: Path) -> tuple[str 
                 ref,
                 (
                     f"Image: {path}\n"
-                    "Image bytes are not attached as text. Use the vision_analyze tool "
-                    f"with image_path={str(path)!r} when visual inspection is needed."
+                    "Image bytes are not attached as text. You must call the vision_analyze tool "
+                    f"with image_path={str(path)!r} before answering questions about visual content. "
+                    "Do not rely on older conversation turns that said vision was disabled; "
+                    "the current tool configuration may have changed."
                 ),
                 language="text",
             )

@@ -476,6 +476,7 @@ class Agent:
             self.last_context_files = None
         extra_parts = [
             f"Current model: {self.model}",
+            self._auxiliary_prompt_context(),
             (
                 "# Path Context\n"
                 f"- workspace: {self.workspace}\n"
@@ -498,8 +499,32 @@ class Agent:
             skills_prompt=skills_prompt,
         )
 
+    def _auxiliary_prompt_context(self):
+        vision = self.auxiliary_config.get("vision", {}) if isinstance(self.auxiliary_config, dict) else {}
+        if not isinstance(vision, dict):
+            return "# Auxiliary Capabilities\n- vision: disabled"
+        enabled = bool(vision.get("enabled"))
+        route = str(vision.get("route") or vision.get("provider") or "unknown")
+        model = str(vision.get("model") or "unknown")
+        if enabled:
+            return (
+                "# Auxiliary Capabilities\n"
+                f"- vision: enabled via {route} using {model}.\n"
+                "- When the user uploads, references, or asks about an image, call vision_analyze with the image path or URL.\n"
+                "- Ignore older conversation turns that say vision was disabled; use the current capability status above."
+            )
+        return (
+            "# Auxiliary Capabilities\n"
+            "- vision: disabled. Do not claim you inspected image content unless vision_analyze succeeds."
+        )
+
     def refresh_system_prompt(self):
         self.system_prompt = self._build_system_prompt()
+
+    def reload_auxiliary_config(self, auxiliary_config=None):
+        self.auxiliary_config = auxiliary_config if isinstance(auxiliary_config, dict) else {}
+        configure_vision_tool(self.workspace, self.auxiliary_config.get("vision", {}))
+        return self.auxiliary_status()
 
     def set_workspace(self, workspace):
         self.workspace = os.path.abspath(workspace or ".")

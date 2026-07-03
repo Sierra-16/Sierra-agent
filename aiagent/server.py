@@ -14,8 +14,10 @@ from .agent import Agent
 from .config_validation import (
     StartupConfigError,
     format_config_issues,
+    load_and_validate_config,
     validate_model_config,
 )
+from .auxiliary_config import resolve_auxiliary_config
 from .gateway import GatewayRuntime
 from .safety import sanitize_arguments
 
@@ -575,6 +577,69 @@ def run_server(
                 "type": "skills_stats",
                 "text": _format_skill_usage_stats(stats),
                 "stats": stats,
+            }, ensure_ascii=False))
+
+        elif cmd == "reload_config":
+            if not config_path:
+                stdout(json.dumps({
+                    "type": "error",
+                    "text": "No config path loaded",
+                }, ensure_ascii=False))
+                continue
+            try:
+                next_config = load_and_validate_config(config_path)
+            except StartupConfigError as exc:
+                stdout(json.dumps({
+                    "type": "error",
+                    "text": format_config_issues(exc.issues),
+                }, ensure_ascii=False))
+                continue
+            except Exception as exc:
+                stdout(json.dumps({
+                    "type": "error",
+                    "text": f"Failed to reload config: {exc}",
+                }, ensure_ascii=False))
+                continue
+
+            if config is not None:
+                config.clear()
+                config.update(next_config)
+
+            if make_agent:
+                _auto_save(current_agent)
+                previous_messages = list(current_agent.messages)
+                previous_conv_id = current_agent.conv_id
+                previous_input_tokens = current_agent.total_input_tokens
+                previous_output_tokens = current_agent.total_output_tokens
+                previous_session_allows = set(
+                    current_agent.permission_policy.session_allow_tools
+                )
+                previous_task = _agent_task_status(current_agent)
+                model_key = str((config or next_config).get("active_model") or "")
+                current_agent.close(preserve_task=True)
+                current_agent = make_agent(model_key)
+                gateway.set_agent(current_agent)
+                current_agent.messages = previous_messages
+                current_agent.sync_memory_review_state()
+                current_agent.refresh_context_estimate()
+                current_agent.conv_id = previous_conv_id
+                current_agent.total_input_tokens = previous_input_tokens
+                current_agent.total_output_tokens = previous_output_tokens
+                current_agent.permission_policy.session_allow_tools.update(
+                    previous_session_allows
+                )
+                if previous_task and previous_task.get("status") == "active":
+                    current_agent.resume_task(previous_task["id"])
+            else:
+                current_agent.reload_auxiliary_config(
+                    resolve_auxiliary_config(next_config)
+                )
+            stdout(json.dumps({
+                "type": "config_reloaded",
+                "text": "config.json reloaded",
+                "model": current_agent.llm.model,
+                "usage": _usage_payload(current_agent),
+                "auxiliary": current_agent.auxiliary_status(),
             }, ensure_ascii=False))
 
         elif cmd == "mcp":

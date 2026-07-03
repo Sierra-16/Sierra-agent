@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell">
+  <div ref="appShellRef" class="app-shell">
     <SidebarShell
       :active-session-id="activeSessionId"
       :active-view="activeView"
@@ -53,6 +53,7 @@
 
 <script setup lang="ts">
 import { MessageCircle, Sparkles } from "lucide-vue-next";
+import { gsap } from "gsap";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import ChatWorkspace from "./components/ChatWorkspace.vue";
 import SettingsDrawer from "./components/SettingsDrawer.vue";
@@ -92,8 +93,10 @@ const settingsOpen = ref(false);
 const chatMessages = ref<ChatMessage[]>([]);
 const activityEvents = ref<ChatActivityEvent[]>([]);
 const bootstrappedConversation = ref(false);
+const appShellRef = ref<HTMLElement | null>(null);
 let timer: number | undefined;
 let activeChatAbortController: AbortController | null = null;
+let shellMotion: ReturnType<typeof gsap.context> | undefined;
 
 const mainNav: NavItem[] = [
   { id: "chat", label: "会话", subtitle: "Chat", icon: MessageCircle }
@@ -795,14 +798,39 @@ function startTimer() {
   }
 }
 
+function setupShellMotion() {
+  if (!appShellRef.value || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+  shellMotion = gsap.context(() => {
+    gsap.set([".sidebar-shell", ".main-shell"], { willChange: "transform, opacity" });
+    gsap.from(".sidebar-shell", {
+      autoAlpha: 0,
+      x: -18,
+      duration: 0.52,
+      ease: "power3.out"
+    });
+    gsap.from(".main-shell", {
+      autoAlpha: 0,
+      y: 16,
+      scale: 0.992,
+      duration: 0.58,
+      delay: 0.08,
+      ease: "power3.out"
+    });
+  }, appShellRef.value);
+}
+
 watch(autoRefresh, startTimer);
 
 onMounted(() => {
+  setupShellMotion();
   loadDashboard();
   startTimer();
 });
 
 onUnmounted(() => {
   window.clearInterval(timer);
+  shellMotion?.revert();
 });
 </script>

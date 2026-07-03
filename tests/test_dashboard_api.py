@@ -525,6 +525,67 @@ class DashboardApiTest(unittest.TestCase):
         vision = next(model for model in models if model["key"] == "vision")
         self.assertTrue(vision["supports_vision"])
 
+    def test_reload_config_command_rebuilds_agent_from_disk(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            config = {
+                "active_model": "base",
+                "models": {
+                    "base": {
+                        "name": "memory-model",
+                        "base_url": "https://memory.example/v1",
+                        "api_key": "memory-key",
+                    }
+                },
+            }
+            disk_config = {
+                "active_model": "base",
+                "models": {
+                    "base": {
+                        "name": "disk-model",
+                        "base_url": "https://disk.example/v1",
+                        "api_key": "disk-key",
+                    }
+                },
+                "auxiliary": {
+                    "vision": {
+                        "enabled": True,
+                        "provider": "auto",
+                        "credentials_model": "base",
+                        "model": "disk-vision",
+                    }
+                },
+            }
+            config_path.write_text(json.dumps(disk_config), encoding="utf-8")
+
+            def make_agent(model_key):
+                agent = FakeAgent()
+                agent.llm = SimpleNamespace(model=config["models"][model_key]["name"])
+                agent.model = agent.llm.model
+                return agent
+
+            app = create_dashboard_app(
+                FakeAgent(),
+                config=config,
+                config_path=config_path,
+                make_agent=make_agent,
+                sierra_dir=".",
+                static_dir="missing-dist",
+            )
+            client = TestClient(app)
+
+            response = client.post(
+                "/api/command",
+                json={"command": "/reload-config", "text": "/reload-config"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["type"], "config_reloaded")
+        self.assertEqual(config["models"]["base"]["name"], "disk-model")
+        self.assertEqual(app.state.agent.llm.model, "disk-model")
+
 
 if __name__ == "__main__":
     unittest.main()

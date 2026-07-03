@@ -24,6 +24,7 @@ export const COMMANDS: CommandDefinition[] = [
   { cmd: "/skills", desc: "查看技能包" },
   { cmd: "/skills-reload", desc: "重新加载技能" },
   { cmd: "/skills-stats", desc: "查看技能使用统计" },
+  { cmd: "/reload-config", desc: "重新读取配置" },
   { cmd: "/reset", desc: "重置当前对话" },
   { cmd: "/compress", desc: "压缩上下文" },
   { cmd: "/task", desc: "查看任务计划" },

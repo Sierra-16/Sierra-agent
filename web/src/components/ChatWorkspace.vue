@@ -1,5 +1,5 @@
 <template>
-  <section class="chat-workspace">
+  <section ref="workspaceRef" class="chat-workspace">
     <header class="chat-statusbar">
       <button class="connection-chip" type="button" :disabled="loading" @click="$emit('refresh')">
         <span class="status-dot" :class="{ stale: error }"></span>
@@ -23,7 +23,7 @@
         </div>
 
         <div
-          v-for="message in messages"
+          v-for="message in renderedMessages"
           :key="message.id"
           class="message-row"
           :class="message.role"
@@ -49,8 +49,50 @@
               <div class="message-label">
                 <span>{{ message.role === "assistant" ? "Sierra" : "You" }}</span>
               </div>
-              <div class="message-bubble">
-                <p>{{ message.text }}</p>
+              <div class="message-bubble" :class="{ 'has-attachments': message.attachments.length }">
+                <p v-if="message.displayText">{{ message.displayText }}</p>
+                <div v-if="message.attachments.length" class="message-attachments">
+                  <template v-for="attachment in message.attachments" :key="attachment.id">
+                    <button
+                      v-if="attachment.kind === 'image'"
+                      type="button"
+                      class="message-attachment"
+                      :class="attachment.kind"
+                      :title="attachment.path"
+                      @click="openImagePreview(attachment)"
+                    >
+                      <span class="attachment-image-shell">
+                        <img
+                          :src="attachment.url"
+                          alt=""
+                          loading="lazy"
+                          @load="animateAttachmentLoad"
+                        />
+                        <span class="attachment-glint"></span>
+                      </span>
+                    </button>
+                    <a
+                      v-else
+                      class="message-attachment"
+                      :class="attachment.kind"
+                      :href="attachment.url"
+                      target="_blank"
+                      rel="noreferrer"
+                      :title="attachment.path"
+                    >
+                      <span class="attachment-file-icon">
+                        <FileText :size="18" />
+                      </span>
+                      <span class="attachment-meta">
+                        <strong>
+                          <FileText :size="13" />
+                          {{ attachment.name }}
+                        </strong>
+                        <small>{{ attachment.extension || "文件" }}</small>
+                      </span>
+                    </a>
+                  </template>
+                </div>
               </div>
             </div>
           </template>
@@ -59,7 +101,7 @@
     </div>
 
     <section class="composer-dock" :class="{ active: showActivity || completionOpen }">
-      <div v-if="showActivity && activeActivity" class="process-panel" :class="processClasses">
+      <div v-if="showProcessPanel && activeActivity" class="process-panel" :class="processClasses">
         <SierraOrnaments variant="process" :active="activeActivity.status === 'active'" />
 
         <div class="process-portrait">
@@ -185,6 +227,40 @@
         </article>
       </TransitionGroup>
 
+      <div v-if="draftAttachments.length" class="draft-attachments">
+        <template v-for="attachment in draftAttachments" :key="attachment.id">
+          <button
+            v-if="attachment.kind === 'image'"
+            type="button"
+            class="draft-attachment"
+            :class="attachment.kind"
+            :title="attachment.path"
+            @click="openImagePreview(attachment)"
+          >
+            <span class="draft-attachment-thumb">
+              <img :src="attachment.url" alt="" loading="lazy" @load="animateAttachmentLoad" />
+            </span>
+          </button>
+          <a
+            v-else
+            class="draft-attachment"
+            :class="attachment.kind"
+            :href="attachment.url"
+            target="_blank"
+            rel="noreferrer"
+            :title="attachment.path"
+          >
+            <span class="draft-attachment-icon">
+              <FileText :size="16" />
+            </span>
+            <span>
+              <strong>{{ attachment.name }}</strong>
+              <small>{{ attachment.extension || "待发送文件" }}</small>
+            </span>
+          </a>
+        </template>
+      </div>
+
       <div v-if="referenceChips.length" class="reference-chips">
         <span v-for="chip in referenceChips" :key="chip" class="reference-chip">
           <AtSign :size="12" />
@@ -284,6 +360,26 @@
         </button>
       </form>
     </section>
+
+    <Teleport to="body">
+      <div
+        v-if="previewImage"
+        ref="previewOverlayRef"
+        class="image-preview-overlay"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+        @keydown.esc="closeImagePreview"
+        @click.self="closeImagePreview"
+      >
+        <button class="image-preview-close" type="button" aria-label="关闭预览" @click="closeImagePreview">
+          <X :size="18" />
+        </button>
+        <div class="image-preview-stage">
+          <img :src="previewImage.url" alt="" />
+        </div>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -307,9 +403,11 @@ import {
   Upload,
   UserRound,
   WandSparkles,
-  Wrench
+  Wrench,
+  X
 } from "lucide-vue-next";
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { gsap } from "gsap";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ChatActivityEvent, ChatMessage } from "../types";
 import SierraOrnaments from "./SierraOrnaments.vue";
 
@@ -320,6 +418,21 @@ type CompletionItem = {
   label: string;
   detail: string;
   value: string;
+};
+
+type MessageAttachment = {
+  id: string;
+  kind: "image" | "file";
+  name: string;
+  path: string;
+  token: string;
+  url: string;
+  extension: string;
+};
+
+type RenderedChatMessage = ChatMessage & {
+  displayText: string;
+  attachments: MessageAttachment[];
 };
 
 const props = defineProps<{
@@ -347,6 +460,18 @@ const emit = defineEmits<{
 
 const DRAFT_KEY = "sierra:web:draft";
 const HISTORY_KEY = "sierra:web:input-history";
+const IMAGE_FILE_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+const FILE_REFERENCE_RE = /@file:(`([^`]+)`|"([^"]+)"|'([^']+)'|([^\s]+))/g;
+const INTERACTIVE_SELECTOR = [
+  ".composer-tool-button",
+  ".send-button",
+  ".stop-button",
+  ".connection-chip",
+  ".completion-item",
+  ".approval-button",
+  ".message-attachment",
+  ".draft-attachment"
+].join(",");
 
 const slashCommands: CompletionItem[] = [
   { kind: "command", label: "/help", detail: "查看 Web 可用命令", value: "/help " },
@@ -372,12 +497,15 @@ const slashCommands: CompletionItem[] = [
   { kind: "command", label: "/skills", detail: "查看可用技能", value: "/skills" },
   { kind: "command", label: "/skills-reload", detail: "重新加载技能", value: "/skills-reload" },
   { kind: "command", label: "/skills-stats", detail: "查看技能使用统计", value: "/skills-stats" },
+  { kind: "command", label: "/reload-config", detail: "重新读取 config.json", value: "/reload-config" },
   { kind: "command", label: "/debug-context", detail: "查看上下文结构", value: "/debug-context" },
   { kind: "command", label: "/audit", detail: "查看工具审计日志", value: "/audit" }
 ];
 
 const draft = ref("");
 const freeText = ref<Record<string, string>>({});
+const workspaceRef = ref<HTMLElement | null>(null);
+const previewOverlayRef = ref<HTMLElement | null>(null);
 const scrollEl = ref<HTMLElement | null>(null);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
@@ -391,19 +519,32 @@ const uploading = ref(false);
 const uploadState = ref("");
 const inputHistory = ref<string[]>([]);
 const historyIndex = ref(-1);
+const previewImage = ref<MessageAttachment | null>(null);
 let referenceRequestId = 0;
+let gsapContext: ReturnType<typeof gsap.context> | undefined;
+let lastAnimatedMessageId = "";
+
+const renderedMessages = computed<RenderedChatMessage[]>(() =>
+  props.messages.map((message) => {
+    const attachments = extractAttachments(message.text);
+    return {
+      ...message,
+      displayText: stripAttachmentTokens(message.text, attachments),
+      attachments
+    };
+  })
+);
+const draftAttachments = computed(() => extractAttachments(draft.value));
 
 const visibleActivityEvents = computed(() => props.activityEvents.slice(-5));
-const showActivity = computed(() => props.activityEvents.length > 0);
 const stackActivityEvents = computed(() =>
-  visibleActivityEvents.value.filter((event) => event.type !== "thinking" || event.status !== "active")
+  visibleActivityEvents.value.filter((event) => event.type !== "thinking")
 );
 const activeActivity = computed(() => {
-  return (
-    visibleActivityEvents.value.find((event) => event.status === "active") ||
-    visibleActivityEvents.value[visibleActivityEvents.value.length - 1]
-  );
+  return visibleActivityEvents.value.find((event) => event.status === "active");
 });
+const showProcessPanel = computed(() => Boolean(activeActivity.value));
+const showActivity = computed(() => showProcessPanel.value || stackActivityEvents.value.length > 0);
 const activeActivityIcon = computed(() => activeActivity.value ? iconFor(activeActivity.value) : Sparkles);
 const processClasses = computed(() => {
   const event = activeActivity.value;
@@ -528,6 +669,106 @@ const referenceChips = computed(() => {
     return token;
   });
 });
+
+function extractAttachments(text: string): MessageAttachment[] {
+  const attachments: MessageAttachment[] = [];
+  const seen = new Set<string>();
+  FILE_REFERENCE_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = FILE_REFERENCE_RE.exec(text)) !== null) {
+    const path = normalizeReferencePath(match[2] || match[3] || match[4] || match[5] || "");
+    if (!path || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    const extension = fileExtension(path);
+    const kind = IMAGE_FILE_RE.test(path) ? "image" : "file";
+    attachments.push({
+      id: `${path}:${match.index}`,
+      kind,
+      name: fileName(path),
+      path,
+      token: match[0],
+      url: previewUrl(path),
+      extension
+    });
+  }
+  return attachments;
+}
+
+function normalizeReferencePath(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/^file:/i, "")
+    .replace(/^[/\\]+/, "");
+}
+
+function stripAttachmentTokens(text: string, attachments: MessageAttachment[]) {
+  let displayText = String(text || "");
+  for (const attachment of attachments) {
+    displayText = displayText.replace(attachment.token, "");
+  }
+  return displayText
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function previewUrl(path: string) {
+  return `/api/files/preview?path=${encodeURIComponent(path)}`;
+}
+
+function fileName(path: string) {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").filter(Boolean).pop() || normalized || "file";
+}
+
+function fileExtension(path: string) {
+  const name = fileName(path);
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot + 1).toUpperCase() : "";
+}
+
+function openImagePreview(attachment: MessageAttachment) {
+  previewImage.value = attachment;
+  nextTick(() => {
+    const overlay = previewOverlayRef.value;
+    if (!overlay) {
+      return;
+    }
+    overlay.focus({ preventScroll: true });
+    runScopedAnimation(() => {
+      gsap.fromTo(
+        overlay,
+        { autoAlpha: 0 },
+        { autoAlpha: 1, duration: 0.18, ease: "power2.out", overwrite: "auto" }
+      );
+      gsap.fromTo(
+        overlay.querySelector(".image-preview-stage"),
+        { autoAlpha: 0, y: 18, scale: 0.965 },
+        { autoAlpha: 1, y: 0, scale: 1, duration: 0.28, ease: "power3.out", overwrite: "auto" }
+      );
+    });
+  });
+}
+
+function closeImagePreview() {
+  const overlay = previewOverlayRef.value;
+  if (!overlay || prefersReducedMotion()) {
+    previewImage.value = null;
+    return;
+  }
+  gsap.to(overlay, {
+    autoAlpha: 0,
+    duration: 0.16,
+    ease: "power2.in",
+    overwrite: "auto",
+    onComplete: () => {
+      previewImage.value = null;
+    }
+  });
+}
 
 function submitDraft() {
   const message = draft.value.trim();
@@ -903,6 +1144,262 @@ function riskClass(event: ChatActivityEvent) {
   return "";
 }
 
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+}
+
+function runScopedAnimation(callback: () => void) {
+  if (prefersReducedMotion()) {
+    return;
+  }
+  if (gsapContext) {
+    gsapContext.add(callback);
+  } else {
+    callback();
+  }
+}
+
+function setupMotion() {
+  if (!workspaceRef.value) {
+    return;
+  }
+  gsapContext = gsap.context(() => {
+    gsap.set(
+      [
+        ".chat-statusbar",
+        ".composer-dock",
+        ".message-row",
+        ".status-card",
+        ".process-panel",
+        ".message-attachment"
+      ],
+      { willChange: "transform, opacity" }
+    );
+    if (prefersReducedMotion()) {
+      return;
+    }
+    gsap.from(".chat-statusbar", {
+      autoAlpha: 0,
+      y: -10,
+      duration: 0.42,
+      ease: "power2.out"
+    });
+    gsap.from(".composer-dock", {
+      autoAlpha: 0,
+      y: 22,
+      scale: 0.985,
+      duration: 0.52,
+      delay: 0.08,
+      ease: "power3.out"
+    });
+    gsap.from(".empty-hero h3", {
+      autoAlpha: 0,
+      y: 14,
+      scale: 0.98,
+      duration: 0.58,
+      delay: 0.16,
+      ease: "power3.out"
+    });
+    gsap.to(".usage-orb", {
+      rotation: 360,
+      duration: 12,
+      repeat: -1,
+      ease: "none"
+    });
+  }, workspaceRef.value);
+
+  workspaceRef.value.addEventListener("pointerover", handleInteractiveOver);
+  workspaceRef.value.addEventListener("pointerout", handleInteractiveOut);
+  workspaceRef.value.addEventListener("pointerdown", handleInteractiveDown);
+  workspaceRef.value.addEventListener("pointerup", handleInteractiveUp);
+}
+
+function cleanupMotion() {
+  if (workspaceRef.value) {
+    workspaceRef.value.removeEventListener("pointerover", handleInteractiveOver);
+    workspaceRef.value.removeEventListener("pointerout", handleInteractiveOut);
+    workspaceRef.value.removeEventListener("pointerdown", handleInteractiveDown);
+    workspaceRef.value.removeEventListener("pointerup", handleInteractiveUp);
+  }
+  gsapContext?.revert();
+  gsapContext = undefined;
+}
+
+function interactiveTarget(event: Event) {
+  const target = event.target instanceof Element
+    ? event.target.closest<HTMLElement>(INTERACTIVE_SELECTOR)
+    : null;
+  return target && workspaceRef.value?.contains(target) ? target : null;
+}
+
+function handleInteractiveOver(event: PointerEvent) {
+  const target = interactiveTarget(event);
+  if (!target || target.contains(event.relatedTarget as Node | null)) {
+    return;
+  }
+  runScopedAnimation(() => {
+    gsap.to(target, {
+      y: -2,
+      scale: 1.015,
+      duration: 0.18,
+      ease: "power2.out",
+      overwrite: "auto"
+    });
+  });
+}
+
+function handleInteractiveOut(event: PointerEvent) {
+  const target = interactiveTarget(event);
+  if (!target || target.contains(event.relatedTarget as Node | null)) {
+    return;
+  }
+  runScopedAnimation(() => {
+    gsap.to(target, {
+      y: 0,
+      scale: 1,
+      duration: 0.2,
+      ease: "power2.out",
+      overwrite: "auto"
+    });
+  });
+}
+
+function handleInteractiveDown(event: PointerEvent) {
+  const target = interactiveTarget(event);
+  if (!target) {
+    return;
+  }
+  runScopedAnimation(() => {
+    gsap.to(target, {
+      scale: 0.975,
+      duration: 0.1,
+      ease: "power2.out",
+      overwrite: "auto"
+    });
+  });
+}
+
+function handleInteractiveUp(event: PointerEvent) {
+  const target = interactiveTarget(event);
+  if (!target) {
+    return;
+  }
+  runScopedAnimation(() => {
+    gsap.to(target, {
+      y: -2,
+      scale: 1.015,
+      duration: 0.18,
+      ease: "back.out(1.6)",
+      overwrite: "auto"
+    });
+  });
+}
+
+function animateLatestMessage() {
+  const last = renderedMessages.value[renderedMessages.value.length - 1];
+  if (!last || last.id === lastAnimatedMessageId) {
+    return;
+  }
+  lastAnimatedMessageId = last.id;
+  nextTick(() => {
+    const rows = workspaceRef.value?.querySelectorAll<HTMLElement>(".message-row");
+    const row = rows?.[rows.length - 1];
+    if (!row) {
+      return;
+    }
+    const direction = row.classList.contains("user") ? 14 : -14;
+    runScopedAnimation(() => {
+      gsap.fromTo(
+        row,
+        { autoAlpha: 0, x: direction, y: 8, scale: 0.985 },
+        {
+          autoAlpha: 1,
+          x: 0,
+          y: 0,
+          scale: 1,
+          duration: 0.28,
+          ease: "power3.out",
+          overwrite: "auto"
+        }
+      );
+      gsap.from(row.querySelectorAll(".message-attachment"), {
+        autoAlpha: 0,
+        y: 12,
+        scale: 0.96,
+        duration: 0.34,
+        ease: "back.out(1.5)",
+        stagger: 0.06
+      });
+    });
+  });
+}
+
+function animateActivityPanel() {
+  nextTick(() => {
+    const panel = workspaceRef.value?.querySelector<HTMLElement>(".process-panel");
+    const cards = workspaceRef.value?.querySelectorAll<HTMLElement>(".status-card");
+    runScopedAnimation(() => {
+      if (panel) {
+        gsap.fromTo(
+          panel,
+          { autoAlpha: 0, y: 12, scale: 0.99 },
+          { autoAlpha: 1, y: 0, scale: 1, duration: 0.26, ease: "power3.out", overwrite: "auto" }
+        );
+      }
+      if (cards?.length) {
+        gsap.from(cards[cards.length - 1], {
+          autoAlpha: 0,
+          y: 10,
+          scale: 0.98,
+          duration: 0.22,
+          ease: "power2.out",
+          overwrite: "auto"
+        });
+      }
+    });
+  });
+}
+
+function animateUploadState() {
+  nextTick(() => {
+    const state = workspaceRef.value?.querySelector<HTMLElement>(".upload-state");
+    if (!state) {
+      return;
+    }
+    runScopedAnimation(() => {
+      gsap.fromTo(
+        state,
+        { autoAlpha: 0, y: 6, scale: 0.96 },
+        { autoAlpha: 1, y: 0, scale: 1, duration: 0.22, ease: "back.out(1.8)", overwrite: "auto" }
+      );
+    });
+  });
+}
+
+function animateAttachmentLoad(event: Event) {
+  const target = event.currentTarget instanceof Element
+    ? event.currentTarget.closest<HTMLElement>(".message-attachment, .draft-attachment")
+    : null;
+  if (!target) {
+    return;
+  }
+  runScopedAnimation(() => {
+    gsap.fromTo(
+      target,
+      { autoAlpha: 0.74, y: 8, scale: 0.975 },
+      { autoAlpha: 1, y: 0, scale: 1, duration: 0.34, ease: "power3.out", overwrite: "auto" }
+    );
+    const glint = target.querySelector(".attachment-glint");
+    if (glint) {
+      gsap.fromTo(
+        glint,
+        { xPercent: -120, autoAlpha: 0 },
+        { xPercent: 120, autoAlpha: 0.7, duration: 0.62, ease: "power2.inOut", overwrite: "auto" }
+      );
+    }
+  });
+}
+
 async function scrollToBottom() {
   await nextTick();
   if (scrollEl.value) {
@@ -910,7 +1407,13 @@ async function scrollToBottom() {
   }
 }
 
-onMounted(loadComposerState);
+onMounted(() => {
+  loadComposerState();
+  setupMotion();
+  animateLatestMessage();
+});
+
+onUnmounted(cleanupMotion);
 
 watch(
   () => [
@@ -922,7 +1425,20 @@ watch(
   ],
   () => {
     scrollToBottom();
+    animateLatestMessage();
   },
   { flush: "post" }
 );
+
+watch(
+  () => props.activityEvents.map((event) => `${event.id}:${event.status}:${event.detail}`).join("|"),
+  animateActivityPanel,
+  { flush: "post" }
+);
+
+watch(uploadState, (value) => {
+  if (value) {
+    animateUploadState();
+  }
+});
 </script>

@@ -13,12 +13,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .config_validation import StartupConfigError, format_config_issues, validate_model_config
+from .config_validation import (
+    StartupConfigError,
+    format_config_issues,
+    load_and_validate_config,
+    validate_model_config,
+)
 from .auxiliary_config import auxiliary_status
 from .gateway import GatewayRuntime, sanitize_gateway_event
 from .safety import sanitize_text
@@ -318,6 +323,22 @@ def create_dashboard_app(
             "size": len(raw),
             "reference": f"@file:{_quote_reference_value(relative_path)} ",
         }
+
+    @app.get("/api/files/preview")
+    def file_preview(path: str) -> FileResponse:
+        workspace = Path(getattr(app.state.gateway.agent, "workspace", "") or app.state.sierra_dir).resolve()
+        if not workspace.exists() or not workspace.is_dir():
+            workspace = app.state.sierra_dir
+        raw_path = str(path or "").strip().lstrip("/\\")
+        target = (workspace / raw_path).resolve()
+        if not _is_relative_to(target, workspace) or not target.is_file():
+            raise HTTPException(status_code=404, detail="file not found")
+        mime_type, _encoding = mimetypes.guess_type(str(target))
+        return FileResponse(
+            target,
+            media_type=mime_type or "application/octet-stream",
+            filename=target.name,
+        )
 
     @app.get("/api/conversations/{conversation_id}")
     def conversation(conversation_id: str) -> dict[str, Any]:
@@ -674,6 +695,9 @@ def _execute_dashboard_command(app: FastAPI, request: CommandRequest) -> dict[st
         text = status.get("text") if isinstance(status, dict) else ""
         return _ok("debug_context", text or _format_debug_context(status if isinstance(status, dict) else {}), status=status)
 
+    if command in {"reload_config", "reload-config", "config_reload", "config-reload"}:
+        return _reload_config_from_disk(app)
+
     if command in {"model", "models"}:
         model_key = request.key.strip() or argument
         if not model_key:
@@ -1029,6 +1053,34 @@ def _delete_mcp_config(app: FastAPI, server_name: str) -> dict[str, Any]:
     }
 
 
+def _reload_config_from_disk(app: FastAPI) -> dict[str, Any]:
+    config_path = getattr(app.state, "config_path", None)
+    if not config_path:
+        return _ok("config_reload", "Web 后端没有配置文件路径，无法重载。", success=False)
+    try:
+        next_config = load_and_validate_config(config_path)
+    except StartupConfigError as exc:
+        return _ok("config_reload", format_config_issues(exc.issues), success=False)
+    except Exception as exc:
+        return _ok("config_reload", f"读取配置失败: {exc}", success=False)
+
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    config.clear()
+    config.update(next_config)
+    app.state.config = config
+    model_key = str(config.get("active_model") or "")
+    rebuilt = _rebuild_agent(app, model_key)
+    if not rebuilt.get("ok"):
+        return rebuilt
+    return {
+        **rebuilt,
+        "type": "config_reloaded",
+        "text": "config.json 已重新读取，当前 Agent 已热重载。",
+        "active": model_key,
+        "auxiliary": _auxiliary(app.state.gateway.agent),
+    }
+
+
 def _rebuild_agent(app: FastAPI, model_key: str) -> dict[str, Any]:
     make_agent = getattr(app.state, "make_agent", None)
     if not callable(make_agent):
@@ -1225,6 +1277,7 @@ def _format_help() -> str:
         "/skills 查看技能",
         "/skills-reload 重新加载技能",
         "/skills-stats 查看技能统计",
+        "/reload-config 重新读取 config.json",
         "/debug-context 查看上下文结构",
         "/audit 查看工具审计",
     ])
@@ -1441,6 +1494,7 @@ def _format_help() -> str:
         "/skills 查看技能",
         "/skills-reload 重新加载技能",
         "/skills-stats 查看技能统计",
+        "/reload-config 重新读取 config.json",
         "/debug-context 查看上下文结构",
         "/audit 查看工具审计",
     ])

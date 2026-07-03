@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, ".")
 
 from aiagent.agent import Agent
+from aiagent.auxiliary_config import resolve_auxiliary_config
 from aiagent.config_validation import (
     StartupConfigError,
     format_config_issues,
@@ -60,6 +61,7 @@ def make_agent(model_key: str) -> Agent:
         cron_config=CONFIG.get("cron", {}),
         checkpoint_config=CONFIG.get("checkpoints", {}),
         tools_config=CONFIG.get("tools", {}),
+        auxiliary_config=resolve_auxiliary_config(CONFIG),
         workspace=os.getcwd(),
         sierra_dir=str(SIERRA_DIR),
         permission_config=CONFIG.get("permissions", {}),

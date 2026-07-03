@@ -742,6 +742,200 @@ input:focus-visible {
   white-space: pre-wrap;
 }
 
+.message-bubble.has-attachments {
+  display: grid;
+  gap: 10px;
+}
+
+.message-attachments {
+  display: grid;
+  gap: 9px;
+  min-width: min(320px, 100%);
+}
+
+.message-attachment {
+  position: relative;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  padding: 8px;
+  border: 1px solid rgba(255, 235, 172, 0.24);
+  border-radius: var(--radius);
+  color: #edf8ee;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.18), transparent 40%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(134, 217, 106, 0.08) 52%, rgba(10, 36, 23, 0.24)),
+    rgba(3, 12, 8, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 12px 28px rgba(0, 0, 0, 0.18);
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  backdrop-filter: blur(22px) saturate(1.38);
+  will-change: transform, opacity;
+}
+
+.message-attachment.image {
+  grid-template-columns: minmax(138px, 220px);
+  align-items: stretch;
+  padding: 7px;
+  cursor: zoom-in;
+}
+
+.attachment-image-shell {
+  position: relative;
+  display: block;
+  min-height: 118px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: calc(var(--radius) - 1px);
+  background:
+    radial-gradient(circle at 50% 45%, rgba(246, 198, 91, 0.16), transparent 38%),
+    rgba(2, 8, 6, 0.5);
+}
+
+.attachment-image-shell img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.attachment-glint {
+  position: absolute;
+  inset: -30% auto -30% 0;
+  width: 42%;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.26), transparent);
+  filter: blur(2px);
+  transform: skewX(-16deg);
+  opacity: 0;
+}
+
+.attachment-file-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 52px;
+  border: 1px solid rgba(56, 216, 199, 0.22);
+  border-radius: calc(var(--radius) - 1px);
+  color: #baf8ef;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(56, 216, 199, 0.08)),
+    rgba(2, 8, 6, 0.36);
+}
+
+.attachment-meta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.message-attachment.image .attachment-meta {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  padding: 8px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: calc(var(--radius) - 1px);
+  background:
+    linear-gradient(135deg, rgba(5, 14, 10, 0.72), rgba(5, 14, 10, 0.38)),
+    rgba(2, 8, 6, 0.32);
+  backdrop-filter: blur(18px) saturate(1.4);
+}
+
+.attachment-meta strong {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: #fff5cf;
+  font-size: 12px;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-meta small {
+  overflow: hidden;
+  color: #a9c7a8;
+  font-size: 11px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment:hover {
+  border-color: rgba(255, 217, 120, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 16px 34px rgba(0, 0, 0, 0.22),
+    0 0 26px rgba(246, 198, 91, 0.1);
+}
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(246, 198, 91, 0.12), transparent 30%),
+    rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(22px) saturate(1.18);
+}
+
+.image-preview-stage {
+  display: grid;
+  place-items: center;
+  max-width: min(1080px, 94vw);
+  max-height: 88vh;
+  overflow: hidden;
+  border: 1px solid rgba(255, 235, 172, 0.34);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(8, 42, 29, 0.18)),
+    rgba(2, 8, 6, 0.52);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 30px 90px rgba(0, 0, 0, 0.45),
+    0 0 44px rgba(246, 198, 91, 0.12);
+}
+
+.image-preview-stage img {
+  display: block;
+  max-width: 94vw;
+  max-height: 86vh;
+  object-fit: contain;
+}
+
+.image-preview-close {
+  position: fixed;
+  top: 22px;
+  right: 22px;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  color: #fff5cf;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+    rgba(2, 8, 6, 0.62);
+  cursor: pointer;
+  backdrop-filter: blur(18px) saturate(1.3);
+}
+
 .composer-dock {
   position: relative;
   width: min(980px, calc(100% - 34px));
@@ -1368,6 +1562,86 @@ input:focus-visible {
   border-top-color: var(--teal);
   border-radius: 50%;
   animation: spin 0.85s linear infinite;
+}
+
+.draft-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 10px 0;
+}
+
+.draft-attachment {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  max-width: min(260px, 100%);
+  min-height: 50px;
+  overflow: hidden;
+  padding: 5px 8px 5px 5px;
+  border: 1px solid rgba(56, 216, 199, 0.24);
+  border-radius: var(--radius);
+  color: #e9fff0;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(56, 216, 199, 0.075)),
+    rgba(2, 8, 6, 0.26);
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  will-change: transform, opacity;
+}
+
+.draft-attachment.image {
+  grid-template-columns: 62px;
+  width: 72px;
+  max-width: 72px;
+  padding: 5px;
+  cursor: zoom-in;
+}
+
+.draft-attachment-thumb,
+.draft-attachment-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 40px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: calc(var(--radius) - 1px);
+  background: rgba(2, 8, 6, 0.4);
+}
+
+.draft-attachment.image .draft-attachment-thumb {
+  width: 60px;
+  height: 42px;
+}
+
+.draft-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.draft-attachment strong,
+.draft-attachment small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-attachment strong {
+  color: #fff5cf;
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.draft-attachment small {
+  color: #9cc3a4;
+  font-size: 11px;
+  font-weight: 720;
 }
 
 .reference-chips {
@@ -2458,6 +2732,113 @@ button.settings-row:disabled {
   min-height: 0;
 }
 
+.vision-toggle-button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 50px;
+  padding: 9px 11px;
+  border: 1px solid rgba(111, 141, 111, 0.24);
+  border-radius: var(--radius);
+  color: var(--text);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.09), rgba(134, 217, 106, 0.045)),
+    rgba(2, 8, 6, 0.28);
+  cursor: pointer;
+  text-align: left;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.vision-toggle-button:hover {
+  border-color: rgba(56, 216, 199, 0.34);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(56, 216, 199, 0.075)),
+    rgba(2, 8, 6, 0.36);
+}
+
+.vision-toggle-button:disabled {
+  cursor: wait;
+  opacity: 0.78;
+}
+
+.vision-toggle-button strong,
+.vision-toggle-button small {
+  display: block;
+}
+
+.vision-toggle-button strong {
+  color: #ecfff1;
+  font-size: 12px;
+}
+
+.vision-toggle-button small {
+  margin-top: 2px;
+  color: rgba(199, 218, 198, 0.72);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.vision-toggle-track {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border: 1px solid rgba(111, 141, 111, 0.35);
+  border-radius: 999px;
+  background: rgba(4, 13, 9, 0.56);
+  box-shadow: inset 0 1px 5px rgba(0, 0, 0, 0.28);
+}
+
+.vision-toggle-thumb {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.95), rgba(246, 198, 91, 0.86) 45%, rgba(113, 81, 27, 0.88));
+  box-shadow:
+    0 0 0 1px rgba(246, 198, 91, 0.3),
+    0 2px 8px rgba(0, 0, 0, 0.34);
+  transform: translate(0, -50%);
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.vision-toggle-button.active {
+  border-color: rgba(56, 216, 199, 0.42);
+  background:
+    linear-gradient(135deg, rgba(56, 216, 199, 0.14), rgba(134, 217, 106, 0.08)),
+    rgba(2, 8, 6, 0.38);
+}
+
+.vision-toggle-button.active .vision-toggle-track {
+  border-color: rgba(56, 216, 199, 0.56);
+  background: linear-gradient(135deg, rgba(56, 216, 199, 0.42), rgba(26, 67, 43, 0.82));
+}
+
+.vision-toggle-button.active .vision-toggle-thumb {
+  box-shadow:
+    0 0 0 1px rgba(56, 216, 199, 0.34),
+    0 0 14px rgba(56, 216, 199, 0.42);
+  transform: translate(16px, -50%);
+}
+
+.settings-nav button,
+.settings-actions button,
+.settings-form button,
+.settings-sidebar-footer button,
+.config-list-item,
+.mcp-transport-tabs button,
+button.settings-row,
+.icon-action {
+  transform-origin: center;
+}
+
 .settings-row.selected,
 button.settings-row.selected {
   border-bottom-color: rgba(56, 216, 199, 0.38);
@@ -3047,6 +3428,14 @@ button.settings-row.selected {
 
   .message-row {
     max-width: 94%;
+  }
+
+  .message-attachment.image {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .attachment-image-shell {
+    min-height: 96px;
   }
 
   .process-panel {

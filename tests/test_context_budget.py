@@ -27,6 +27,30 @@ class ContextBudgetTests(unittest.TestCase):
         self.assertEqual(prepared[2]["content"], original[2]["content"])
         self.assertEqual(len(original[0]["content"]), 1004)
 
+    def test_prepare_request_messages_invalidates_stale_disabled_vision_history(self):
+        original = [
+            {
+                "role": "tool",
+                "content": '{"ok": false, "error": "vision is disabled; enable auxiliary.vision in config.json"}',
+                "tool_call_id": "vision-1",
+            },
+            {
+                "role": "assistant",
+                "content": "The vision module is disabled, so I cannot inspect images.",
+            },
+            {"role": "user", "content": "try again"},
+        ]
+
+        prepared, stats = prepare_conversation_messages_for_request(
+            original,
+            vision_enabled=True,
+        )
+
+        self.assertEqual(stats["stale_vision_messages"], 2)
+        self.assertIn("stale vision-disabled result omitted", prepared[0]["content"])
+        self.assertIn("vision_analyze", prepared[1]["content"])
+        self.assertIn("vision is disabled", original[0]["content"])
+
     def test_fit_messages_keeps_recent_turns_and_omits_old_history(self):
         system_messages = [{"role": "system", "content": "system"}]
         conversation_messages = [

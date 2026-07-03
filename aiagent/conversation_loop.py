@@ -532,7 +532,15 @@ def run_conversation_loop(
                 "recent_tool_result_message_count",
                 8,
             ),
+            vision_enabled=_agent_vision_enabled(),
         )
+
+    def _agent_vision_enabled():
+        auxiliary_config = getattr(agent, "auxiliary_config", {})
+        if not isinstance(auxiliary_config, dict):
+            return False
+        vision = auxiliary_config.get("vision", {})
+        return isinstance(vision, dict) and bool(vision.get("enabled"))
 
     def _call_compress_messages(*, force=False, keep_tokens=None):
         compress_messages = getattr(agent, "compress_messages", None)

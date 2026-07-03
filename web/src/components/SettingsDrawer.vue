@@ -3,7 +3,17 @@
     <Transition name="drawer">
       <div v-if="open" class="settings-overlay" @keydown.esc="$emit('close')">
         <button class="settings-backdrop" type="button" aria-label="关闭设置" @click="$emit('close')"></button>
-        <aside class="settings-drawer" role="dialog" aria-modal="true" aria-label="Sierra 设置">
+        <aside
+          ref="settingsDrawerRef"
+          class="settings-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Sierra 设置"
+          @pointerdown.capture="playSettingsButtonPress"
+          @pointerup.capture="playSettingsButtonRelease"
+          @pointercancel.capture="playSettingsButtonRelease"
+          @click.capture="playKeyboardButtonFeedback"
+        >
           <nav class="settings-sidebar" aria-label="设置导航">
             <div class="settings-brand">
               <img src="/brand/sierra-avatar.png?v=transparent-1" alt="" />
@@ -148,15 +158,26 @@
                           <input v-model.number="modelForm.context_window" type="number" min="1" />
                         </label>
                       </div>
-                      <label class="settings-toggle">
-                        <input v-model="modelForm.supports_vision" type="checkbox" />
+                      <button
+                        class="vision-toggle-button"
+                        :class="{ active: modelForm.supports_vision }"
+                        type="button"
+                        :disabled="modelSaving"
+                        :aria-pressed="modelForm.supports_vision"
+                        @click.stop.prevent="toggleModelVision"
+                      >
+                        <span class="vision-toggle-track" aria-hidden="true">
+                          <span class="vision-toggle-thumb"></span>
+                        </span>
                         <span>
                           <strong>支持图片理解</strong>
                           <small>勾选后，Sierra 会优先用这个主模型分析图片。</small>
                         </span>
-                      </label>
+                      </button>
                       <div class="settings-actions align-right">
-                        <button type="submit">保存配置</button>
+                        <button type="submit" :disabled="modelSaving">
+                          {{ modelSaving ? "保存中" : "保存配置" }}
+                        </button>
                         <button v-if="modelForm.key" type="button" @click="switchModel(modelForm.key)">切换到此模型</button>
                         <button v-if="canDeleteModel" class="danger" type="button" @click="deleteModel(modelForm.key)">删除</button>
                       </div>
@@ -497,6 +518,7 @@ import {
   Wrench,
   X
 } from "lucide-vue-next";
+import { gsap } from "gsap";
 import { computed, defineComponent, h, ref, watch } from "vue";
 import type { Component } from "vue";
 import type { DashboardPayload } from "../types";
@@ -537,6 +559,7 @@ const emit = defineEmits<{
 }>();
 
 const activeSection = ref<SettingsSection>("model");
+const settingsDrawerRef = ref<HTMLElement | null>(null);
 const cronMinutes = ref(60);
 const cronPrompt = ref("");
 const memoryQuery = ref("");
@@ -546,6 +569,7 @@ const skillReloading = ref(false);
 const settingsNotice = ref("");
 const mcpNotice = ref("");
 const panelBusy = ref("");
+const modelSaving = ref(false);
 const skillStatsText = ref("");
 const mcpStatusText = ref("");
 const memoryCommandText = ref("");
@@ -900,8 +924,97 @@ function newModel() {
   settingsNotice.value = "";
 }
 
-async function saveModel() {
+async function toggleModelVision() {
+  const previous = modelForm.value.supports_vision;
+  modelForm.value.supports_vision = !previous;
   settingsNotice.value = "";
+  const isExistingModel = modelConfigs.value.some((model) => model.key === modelForm.value.key);
+  if (!isExistingModel) {
+    return;
+  }
+  const ok = await saveModel({
+    pendingText: modelForm.value.supports_vision
+      ? "正在启用图片理解，并热重载 Sierra..."
+      : "正在关闭图片理解，并热重载 Sierra..."
+  });
+  if (!ok) {
+    modelForm.value.supports_vision = previous;
+  }
+}
+
+function playSettingsButtonPress(event: PointerEvent) {
+  const target = feedbackButtonFromEvent(event);
+  if (!target || prefersReducedMotion()) {
+    return;
+  }
+  gsap.killTweensOf(target);
+  gsap.to(target, {
+    scale: 0.965,
+    duration: 0.08,
+    ease: "power2.out",
+    overwrite: "auto"
+  });
+}
+
+function playSettingsButtonRelease(event: PointerEvent) {
+  const target = feedbackButtonFromEvent(event);
+  if (!target || prefersReducedMotion()) {
+    return;
+  }
+  gsap.to(target, {
+    scale: 1,
+    duration: 0.34,
+    ease: "back.out(2.6)",
+    clearProps: "transform",
+    overwrite: "auto"
+  });
+}
+
+function playKeyboardButtonFeedback(event: MouseEvent) {
+  if (event.detail !== 0) {
+    return;
+  }
+  const target = feedbackButtonFromEvent(event);
+  if (!target || prefersReducedMotion()) {
+    return;
+  }
+  gsap.fromTo(
+    target,
+    { scale: 0.97 },
+    {
+      scale: 1,
+      duration: 0.32,
+      ease: "back.out(2.4)",
+      clearProps: "transform",
+      overwrite: "auto"
+    }
+  );
+}
+
+function feedbackButtonFromEvent(event: Event) {
+  const rawTarget = event.target;
+  if (!(rawTarget instanceof Element)) {
+    return null;
+  }
+  const button = rawTarget.closest("button");
+  if (!(button instanceof HTMLElement) || button.disabled || button.classList.contains("settings-backdrop")) {
+    return null;
+  }
+  return button;
+}
+
+function prefersReducedMotion() {
+  return typeof window !== "undefined"
+    && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+}
+
+async function saveModel(options: { pendingText?: string } | Event = {}) {
+  if (modelSaving.value) {
+    return false;
+  }
+  modelSaving.value = true;
+  const pendingText = options instanceof Event ? "" : options.pendingText || "";
+  settingsNotice.value = pendingText;
   try {
     const response = await fetch("/api/config/models", {
       method: "POST",
@@ -917,8 +1030,12 @@ async function saveModel() {
     selectedModelKey.value = modelForm.value.key;
     modelForm.value.api_key = "";
     emit("refresh");
+    return true;
   } catch (err) {
     settingsNotice.value = `保存失败: ${err instanceof Error ? err.message : String(err)}`;
+    return false;
+  } finally {
+    modelSaving.value = false;
   }
 }
 

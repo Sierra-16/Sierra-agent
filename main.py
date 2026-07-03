@@ -170,6 +170,7 @@ def _handle_command(cmd, agent):
 /skills               list skills
 /skills-reload        reload skills
 /skills-stats         show skill stats
+/reload-config        reload config.json
 /memory               show curated memory
 /audit                show recent tool audit
 """)
@@ -293,6 +294,16 @@ def _handle_command(cmd, agent):
         _print_skills(result["skills"])
         for error in result["errors"]:
             print(f"! {error}")
+        return
+    if cmd == "/reload-config":
+        global config
+        try:
+            config = load_and_validate_config(CONFIG_PATH)
+        except StartupConfigError as exc:
+            print(format_config_issues(exc.issues))
+            return
+        agent.reload_auxiliary_config(resolve_auxiliary_config(config))
+        print("config.json reloaded")
         return
     if cmd == "/skills-stats":
         _print_skill_stats(agent.skill_usage_stats(limit=20))

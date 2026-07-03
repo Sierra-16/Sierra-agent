@@ -22,6 +22,7 @@ export const HelpHint: React.FC<HelpHintProps> = ({ theme, cols }) => {
     ["/skills", "查看技能包"],
     ["/skills-reload", "重新加载技能"],
     ["/skills-stats", "查看技能使用统计"],
+    ["/reload-config", "重新读取配置"],
     ["/reset", "重置当前对话"],
     ["/compress", "压缩上下文"],
     ["/task", "查看当前任务计划"],

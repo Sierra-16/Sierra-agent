@@ -177,7 +177,7 @@ export function useMainApp(gw: Gateway): MainApp {
         case "/help":
           appendMessage({
             role: "system",
-            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /undo [n]  /retry  /model  /mcp  /skills  /skills-reload  /skills-stats  /reset  /compress  /task  /task-cancel  /debug-context  /jobs  /cron  /cron-add <分钟> <提示>  /cron-remove  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
+            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /undo [n]  /retry  /model  /mcp  /skills  /skills-reload  /skills-stats  /reload-config  /reset  /compress  /task  /task-cancel  /debug-context  /jobs  /cron  /cron-add <分钟> <提示>  /cron-remove  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
           });
           break;
         case "/new":
@@ -315,6 +315,11 @@ export function useMainApp(gw: Gateway): MainApp {
           setBusy(true);
           setStatusText("reading skill stats");
           gw.send({ cmd: "skills_stats" });
+          break;
+        case "/reload-config":
+          setBusy(true);
+          setStatusText("reloading config");
+          gw.send({ cmd: "reload_config" });
           break;
         case "/model":
           setModelPickerLoading(true);
@@ -713,6 +718,13 @@ export function useMainApp(gw: Gateway): MainApp {
           setModelPickerOpen(false);
           setModelPickerLoading(false);
           appendMessage({ role: "system", text: `已切换模型: ${ev.model || ev.key || ""}` });
+          break;
+        case "config_reloaded":
+          if (ev.model) setModel(ev.model);
+          if (ev.usage) setUsage(ev.usage);
+          appendMessage({ role: "system", text: ev.text || "config.json 已重新读取" });
+          setBusy(false);
+          setStatusText("");
           break;
         case "convs":
           appendMessage({ role: "system", text: "历史对话:\n" + (ev.convs || []).map((c: any, i: number) => `  [${i + 1}] ${c.title}`).join("\n") });

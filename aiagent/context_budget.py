@@ -12,6 +12,7 @@ def prepare_conversation_messages_for_request(
     old_tool_result_max_chars: int = 2400,
     recent_tool_result_max_chars: int = 12000,
     recent_message_count: int = 8,
+    vision_enabled: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Copy conversation messages and shrink bulky tool results for the request.
 
@@ -25,9 +26,13 @@ def prepare_conversation_messages_for_request(
     prepared = []
     truncated_tool_results = 0
     omitted_chars = 0
+    stale_vision_messages = 0
 
     for index, message in enumerate(messages):
         copied = dict(message)
+        if vision_enabled and _is_stale_disabled_vision_message(copied):
+            copied["content"] = _stale_vision_replacement(copied)
+            stale_vision_messages += 1
         if copied.get("role") == "tool":
             limit = recent_limit if index >= recent_start else old_limit
             content = copied.get("content")
@@ -42,6 +47,7 @@ def prepare_conversation_messages_for_request(
     return prepared, {
         "truncated_tool_results": truncated_tool_results,
         "omitted_tool_result_chars": max(0, omitted_chars),
+        "stale_vision_messages": stale_vision_messages,
     }
 
 
@@ -138,3 +144,29 @@ def _truncate_tool_result(content: str, limit: int) -> str:
     head = max(100, (limit - len(marker)) * 2 // 3)
     tail = max(100, limit - len(marker) - head)
     return content[:head] + marker + content[-tail:]
+
+
+def _is_stale_disabled_vision_message(message: dict[str, Any]) -> bool:
+    role = message.get("role")
+    if role not in {"assistant", "tool"}:
+        return False
+    content = str(message.get("content") or "").lower()
+    if "vision is disabled" in content:
+        return True
+    if "vision module is disabled" in content or "vision module disabled" in content:
+        return True
+    if "视觉模块" in content and ("关掉" in content or "没开" in content or "关闭" in content):
+        return True
+    return False
+
+
+def _stale_vision_replacement(message: dict[str, Any]) -> str:
+    if message.get("role") == "tool":
+        return (
+            '{"ok": false, "error": "stale vision-disabled result omitted; '
+            'vision is currently enabled, so call vision_analyze again if image analysis is needed."}'
+        )
+    return (
+        "[旧回复已失效：当时 Sierra 认为视觉模块关闭；当前视觉能力已开启，"
+        "如果用户询问图片内容，应重新调用 vision_analyze。]"
+    )
