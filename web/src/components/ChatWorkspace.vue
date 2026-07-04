@@ -535,10 +535,28 @@ const renderedMessages = computed<RenderedChatMessage[]>(() =>
   })
 );
 const draftAttachments = computed(() => extractAttachments(draft.value));
+const recentUserImageReference = computed(() =>
+  renderedMessages.value
+    .slice(-4)
+    .some((message) => message.role === "user" && message.attachments.some((item) => item.kind === "image"))
+);
 
 const visibleActivityEvents = computed(() => props.activityEvents.slice(-5));
 const stackActivityEvents = computed(() =>
-  visibleActivityEvents.value.filter((event) => event.type !== "thinking")
+  visibleActivityEvents.value
+    .filter((event) => {
+      if (event.type === "thinking") {
+        return false;
+      }
+      if (event.status === "active" || event.status === "error") {
+        return true;
+      }
+      if (event.type === "approval" || event.type === "user-input") {
+        return true;
+      }
+      return event.type === "tool" && event.status === "done";
+    })
+    .slice(-2)
 );
 const activeActivity = computed(() => {
   return visibleActivityEvents.value.find((event) => event.status === "active");
@@ -563,6 +581,9 @@ const processKicker = computed(() => {
   }
   if (event.type === "user-input") {
     return "等待";
+  }
+  if (event.type === "thinking" && recentUserImageReference.value) {
+    return "视觉";
   }
   return "处理";
 });
@@ -593,14 +614,20 @@ const processTitle = computed(() => {
     return "整理上下文";
   }
   if (event.type === "thinking") {
+    if (recentUserImageReference.value && event.status === "active") {
+      return "分析图片中";
+    }
     return event.status === "done" ? "完成" : "思考中";
   }
   return event.label || "处理中";
 });
 const processDetail = computed(() => {
   const event = activeActivity.value;
-  if (!event || event.type === "thinking") {
+  if (!event) {
     return "";
+  }
+  if (event.type === "thinking") {
+    return recentUserImageReference.value ? "正在读取你发来的图片。" : "";
   }
   return event.reason || event.detail || "";
 });
@@ -633,6 +660,9 @@ const processSideText = computed(() => {
   }
   if (event.type === "context" || event.type === "reference") {
     return "上下文";
+  }
+  if (event.type === "thinking" && recentUserImageReference.value) {
+    return "看图";
   }
   return "思考";
 });

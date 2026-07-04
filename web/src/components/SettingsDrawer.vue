@@ -81,6 +81,9 @@
                   </div>
                   <div class="settings-actions">
                     <button type="button" @click="loadModelConfig">刷新</button>
+                    <button type="button" :disabled="diagnosticsLoading === 'models'" @click="loadModelDiagnostics">
+                      {{ diagnosticsLoading === "models" ? "诊断中" : "诊断" }}
+                    </button>
                     <button type="button" @click="newModel">新增模型</button>
                   </div>
                 </div>
@@ -88,6 +91,8 @@
                 <div class="settings-kpi-grid">
                   <ListRow title="当前模型" :description="activeModelLabel" :meta="`${usagePercent.toFixed(0)}% 上下文`" />
                   <ListRow title="配置数量" :description="`${modelConfigs.length} 个模型配置`" :meta="activeModelConfig?.key || 'none'" />
+                  <ListRow title="可用模型" :description="`${modelReadyCount} 个`" :meta="`${modelNeedsSetupCount} 待处理`" />
+                  <ListRow title="视觉模型" :description="`${modelVisionCount} 个`" :meta="effectiveVisionEnabled ? '当前可看图' : '当前不可看图'" />
                 </div>
 
                 <div class="settings-config-layout model-config-layout">
@@ -108,7 +113,9 @@
                         <strong>{{ model.key }}</strong>
                         <small>{{ model.name }} · {{ model.base_url || "未配置 base_url" }}</small>
                       </span>
-                      <b :class="{ live: model.active }">{{ model.active ? "当前" : "编辑" }}</b>
+                      <b :class="{ live: model.active, warn: modelDiagnostic(model.key)?.status === 'needs_setup' }">
+                        {{ modelDiagnostic(model.key)?.status_label || (model.active ? "当前" : "编辑") }}
+                      </b>
                     </button>
                     <ListRow v-if="!modelConfigs.length" title="没有模型" description="至少添加一个模型后才能对话。" />
                   </aside>
@@ -121,11 +128,28 @@
                       </div>
                       <div class="config-state-pills">
                         <b>{{ selectedModelIsActive ? "当前使用" : "可切换" }}</b>
+                        <b :class="{ warn: selectedModelDiagnostic?.status === 'needs_setup' }">
+                          {{ selectedModelDiagnostic?.status_label || "未诊断" }}
+                        </b>
                         <b>{{ modelForm.context_window || 0 }} 上下文</b>
                       </div>
                     </div>
 
                     <form class="settings-editor config-editor-form" @submit.prevent="saveModel">
+                      <div v-if="selectedModelDiagnostic" class="diagnostic-panel" :class="`status-${selectedModelDiagnostic.status}`">
+                        <div>
+                          <strong>{{ selectedModelDiagnostic.status_label }}</strong>
+                          <span>{{ selectedModelDiagnostic.name }}</span>
+                        </div>
+                        <ul v-if="selectedModelDiagnostic.issues?.length">
+                          <li v-for="issue in selectedModelDiagnostic.issues" :key="`${issue.path}-${issue.message}`">
+                            <b>{{ issue.path }}</b>
+                            <span>{{ issue.message }}</span>
+                            <small v-if="issue.hint">{{ issue.hint }}</small>
+                          </li>
+                        </ul>
+                        <p v-else>配置完整，Sierra 可以使用这个模型。</p>
+                      </div>
                       <div class="settings-field-grid two">
                         <label>
                           <span>Key</span>
@@ -158,6 +182,13 @@
                           <input v-model.number="modelForm.context_window" type="number" min="1" />
                         </label>
                       </div>
+                      <div class="vision-status-card" :class="{ active: effectiveVisionEnabled }">
+                        <span class="vision-status-orb" aria-hidden="true"></span>
+                        <span>
+                          <strong>{{ effectiveVisionEnabled ? "Sierra 当前可以看图" : "Sierra 当前不能看图" }}</strong>
+                          <small>{{ visionStatusText }}</small>
+                        </span>
+                      </div>
                       <button
                         class="vision-toggle-button"
                         :class="{ active: modelForm.supports_vision }"
@@ -170,8 +201,8 @@
                           <span class="vision-toggle-thumb"></span>
                         </span>
                         <span>
-                          <strong>支持图片理解</strong>
-                          <small>勾选后，Sierra 会优先用这个主模型分析图片。</small>
+                          <strong>主模型原生视觉</strong>
+                          <small>只有这个模型本身能看图时才开启；否则 Sierra 会使用上方的辅助视觉模块。</small>
                         </span>
                       </button>
                       <div class="settings-actions align-right">
@@ -188,24 +219,105 @@
               </section>
 
               <section v-else-if="activeSection === 'skills'" class="settings-section">
-                <SectionTitle title="Skills" description="Sierra 会按任务选择合适的能力包。这里可以搜索、查看状态，并刷新列表。" />
-                <div class="settings-form">
-                  <input v-model="skillQuery" type="text" placeholder="搜索 skill..." />
-                  <button type="button" :disabled="skillReloading" @click="reloadSkills">
-                    {{ skillReloading ? "加载中" : "重新加载" }}
-                  </button>
-                  <button type="button" :disabled="panelBusy === 'skills_stats'" @click="loadSkillStats">使用统计</button>
+                <div class="settings-page-toolbar">
+                  <div>
+                    <span>能力包</span>
+                    <h3>Skills 管理</h3>
+                    <p>参考 Hermes 的 Skills 页面：这里可以搜索、查看、编辑和新建本地 Skill。保存后 Sierra 会重新加载能力索引。</p>
+                  </div>
+                  <div class="settings-actions">
+                    <button type="button" @click="newSkill">新建 Skill</button>
+                    <button type="button" :disabled="skillReloading" @click="reloadSkills">
+                      {{ skillReloading ? "加载中" : "重新加载" }}
+                    </button>
+                    <button type="button" :disabled="panelBusy === 'skills_stats'" @click="loadSkillStats">使用统计</button>
+                  </div>
                 </div>
+
                 <PanelResult v-if="skillStatsText" title="使用统计" :text="skillStatsText" />
-                <ListRow title="总数" :description="String(payload?.skills.count || 0)" />
-                <ListRow
-                  v-for="skill in filteredSkills"
-                  :key="skill.name"
-                  :title="skill.name"
-                  :description="`${skill.category || 'general'} · ${skill.readiness_status || 'ready'}`"
-                  :meta="skill.offered ? 'offered' : ''"
-                />
-                <ListRow v-if="!filteredSkills.length" title="没有匹配的 Skill" description="换个关键词试试。" />
+                <p v-if="skillNotice" class="settings-notice">{{ skillNotice }}</p>
+
+                <div class="settings-kpi-grid">
+                  <ListRow title="Skill 总数" :description="String(payload?.skills.count || 0)" />
+                  <ListRow title="可提供" :description="String(skillOfferedCount)" :meta="`${skillErrors.length} 个错误`" />
+                </div>
+
+                <div class="settings-config-layout skill-config-layout">
+                  <aside class="settings-list-pane config-index-panel">
+                    <div class="config-panel-header">
+                      <span>Skill 列表</span>
+                      <b>{{ filteredSkills.length }}/{{ skills.length }}</b>
+                    </div>
+                    <input v-model="skillQuery" class="settings-list-search" type="text" placeholder="搜索 skill、分类或描述..." />
+                    <button
+                      v-for="skill in filteredSkills"
+                      :key="skill.name"
+                      class="config-list-item"
+                      :class="{ selected: selectedSkillName === skill.name && skillEditorMode !== 'create' }"
+                      type="button"
+                      @click="selectSkill(skill.name)"
+                    >
+                      <span class="config-list-main">
+                        <strong>{{ skill.name }}</strong>
+                        <small>{{ skill.category || "general" }} · {{ skill.readiness_status || "ready" }}</small>
+                      </span>
+                      <b :class="{ live: skill.offered }">{{ skill.offered ? "可用" : "受限" }}</b>
+                    </button>
+                    <ListRow v-if="!filteredSkills.length" title="没有匹配的 Skill" description="换个关键词试试。" />
+                  </aside>
+
+                  <section class="config-editor-panel skill-editor-panel">
+                    <div class="config-editor-header">
+                      <div>
+                        <span>{{ skillEditorMode === "create" ? "新建 Skill" : "编辑 Skill" }}</span>
+                        <h4>{{ skillEditorTitle }}</h4>
+                      </div>
+                      <div class="config-state-pills">
+                        <b>{{ selectedSkillDetail?.category || skillCreateCategory || "custom" }}</b>
+                        <b>{{ selectedSkillDetail?.readiness_status || "draft" }}</b>
+                      </div>
+                    </div>
+
+                    <div v-if="skillEditorMode === 'idle'" class="skill-empty-state">
+                      <strong>选择一个 Skill 查看完整内容</strong>
+                      <small>你也可以新建一个本地 Skill，让 Sierra 学会一套稳定的工作方法。</small>
+                    </div>
+
+                    <template v-else>
+                      <div v-if="skillEditorMode === 'create'" class="settings-field-grid two">
+                        <label>
+                          <span>名称</span>
+                          <input v-model.trim="skillCreateName" type="text" placeholder="my-skill" />
+                        </label>
+                        <label>
+                          <span>分类</span>
+                          <input v-model.trim="skillCreateCategory" type="text" placeholder="custom" />
+                        </label>
+                      </div>
+
+                      <div v-if="selectedSkillDetail && skillEditorMode === 'edit'" class="skill-detail-summary">
+                        <p>{{ selectedSkillDetail.description || "暂无描述" }}</p>
+                        <span v-if="selectedSkillDetail.path">{{ selectedSkillDetail.path }}</span>
+                      </div>
+
+                      <textarea
+                        v-model="skillEditorContent"
+                        class="skill-content-editor"
+                        spellcheck="false"
+                        :disabled="skillEditorLoading || skillSaving"
+                        placeholder="---&#10;name: my-skill&#10;description: When to use this skill.&#10;---&#10;&#10;# My Skill"
+                      ></textarea>
+
+                      <div class="settings-actions align-right">
+                        <button type="button" :disabled="skillEditorLoading || skillSaving" @click="saveSkill">
+                          {{ skillSaving ? "保存中" : "保存 Skill" }}
+                        </button>
+                        <button type="button" :disabled="skillSaving" @click="resetSkillEditor">取消</button>
+                      </div>
+                    </template>
+                  </section>
+                </div>
+
                 <ListRow
                   v-for="errorItem in skillErrors"
                   :key="errorItem"
@@ -224,6 +336,9 @@
                   </div>
                   <div class="settings-actions">
                     <button type="button" @click="loadMcpConfig">刷新</button>
+                    <button type="button" :disabled="diagnosticsLoading === 'mcp'" @click="loadMcpDiagnostics">
+                      {{ diagnosticsLoading === "mcp" ? "诊断中" : "诊断" }}
+                    </button>
                     <button type="button" @click="newMcp">新增 MCP</button>
                     <button type="button" :disabled="panelBusy === 'mcp'" @click="loadMcpStatus">运行状态</button>
                   </div>
@@ -232,6 +347,8 @@
                 <div class="settings-kpi-grid">
                   <ListRow title="服务数量" :description="`${mcpConfigs.length} 个工具服务`" :meta="`${enabledMcpCount} 已启用`" />
                   <ListRow title="当前编辑" :description="mcpForm.name || '新增工具服务'" :meta="mcpForm.type" />
+                  <ListRow title="运行中" :description="`${mcpRunningCount} 个`" :meta="`${mcpNeedsSetupCount} 待处理`" />
+                  <ListRow title="MCP 工具" :description="`${mcpToolCount} 个`" :meta="mcpDiagnostics?.summary?.tools ? '已发现' : '待发现'" />
                 </div>
                 <PanelResult v-if="mcpStatusText" title="运行状态" :text="mcpStatusText" />
 
@@ -253,7 +370,9 @@
                         <strong>{{ server.name }}</strong>
                         <small>{{ server.type }} · {{ server.url || server.command || "未配置入口" }}</small>
                       </span>
-                      <b :class="{ live: server.enabled !== false }">{{ server.enabled === false ? "off" : "on" }}</b>
+                      <b :class="{ live: mcpDiagnostic(server.name)?.status === 'running', warn: mcpDiagnostic(server.name)?.status === 'needs_setup' }">
+                        {{ mcpDiagnostic(server.name)?.status_label || (server.enabled === false ? "off" : "on") }}
+                      </b>
                     </button>
                     <ListRow v-if="!mcpConfigs.length" title="还没有工具服务" description="可以从右侧新增一个。" />
                   </aside>
@@ -266,11 +385,28 @@
                       </div>
                       <div class="config-state-pills">
                         <b>{{ mcpForm.enabled ? "启用" : "停用" }}</b>
+                        <b :class="{ warn: selectedMcpDiagnostic?.status === 'needs_setup' }">
+                          {{ selectedMcpDiagnostic?.status_label || "未诊断" }}
+                        </b>
                         <b>{{ mcpForm.type }}</b>
                       </div>
                     </div>
 
                     <form class="settings-editor config-editor-form" @submit.prevent="saveMcp">
+                      <div v-if="selectedMcpDiagnostic" class="diagnostic-panel" :class="`status-${selectedMcpDiagnostic.status}`">
+                        <div>
+                          <strong>{{ selectedMcpDiagnostic.status_label }}</strong>
+                          <span>{{ selectedMcpDiagnostic.transport }} · {{ selectedMcpDiagnostic.tools || 0 }} 个工具</span>
+                        </div>
+                        <ul v-if="selectedMcpDiagnostic.issues?.length">
+                          <li v-for="issue in selectedMcpDiagnostic.issues" :key="`${issue.path}-${issue.message}`">
+                            <b>{{ issue.path }}</b>
+                            <span>{{ issue.message }}</span>
+                            <small v-if="issue.hint">{{ issue.hint }}</small>
+                          </li>
+                        </ul>
+                        <p v-else>配置没有发现明显问题。保存后 Sierra 会重新加载工具服务。</p>
+                      </div>
                       <div class="settings-field-grid two">
                         <label>
                           <span>名称</span>
@@ -353,11 +489,110 @@
               </section>
 
               <section v-else-if="activeSection === 'tools'" class="settings-section">
-                <SectionTitle title="工具" description="查看 Sierra 当前能使用的工具，以及它们所属的能力分类。" />
-                <ListRow title="总数" :description="String(payload?.tools.total || 0)" />
-                <ListRow title="直接暴露" :description="String(payload?.tools.direct || 0)" />
-                <ListRow title="延迟搜索" :description="payload?.tools.tool_search_active ? '已启用' : '未启用'" />
-                <ListRow v-for="item in toolsets" :key="item.name" :title="item.name" :description="`${item.count} 个工具`" />
+                <div class="settings-page-toolbar">
+                  <div>
+                    <span>能力清单</span>
+                    <h3>工具运行面板</h3>
+                    <p>查看 Sierra 当前能调用的工具、权限策略和暴露方式。只读工具会直接运行，中高风险工具会先请求确认。</p>
+                  </div>
+                  <div class="settings-actions">
+                    <button type="button" @click="$emit('refresh')">刷新</button>
+                    <button type="button" :disabled="diagnosticsLoading === 'tools'" @click="loadToolDiagnostics">
+                      {{ diagnosticsLoading === "tools" ? "诊断中" : "诊断" }}
+                    </button>
+                  </div>
+                </div>
+
+                <div class="settings-kpi-grid tools-kpi-grid">
+                  <ListRow title="工具总数" :description="String(payload?.tools.total || 0)" />
+                  <ListRow title="直接可见" :description="String(payload?.tools.direct || 0)" />
+                  <ListRow title="延迟检索" :description="payload?.tools.tool_search_active ? '已启用' : '未启用'" :meta="`${payload?.tools.deferred || 0} 个`" />
+                  <ListRow title="需要确认" :description="String(toolPermissionCount.ask || 0)" :meta="`${toolRiskCount.high || 0} 高风险`" />
+                </div>
+                <p v-if="toolNotice" class="settings-notice">{{ toolNotice }}</p>
+                <div v-if="toolDiagnosticsView" class="tool-diagnostic-grid">
+                  <article>
+                    <span>权限策略</span>
+                    <strong>{{ toolDiagnosticsView.summary?.permission?.ask || 0 }}</strong>
+                    <small>需要确认的工具</small>
+                  </article>
+                  <article>
+                    <span>高风险</span>
+                    <strong>{{ toolDiagnosticsView.summary?.risk?.high || 0 }}</strong>
+                    <small>写入、终端、外部动作</small>
+                  </article>
+                  <article>
+                    <span>延迟暴露</span>
+                    <strong>{{ toolDiagnosticsView.summary?.exposure?.deferred || 0 }}</strong>
+                    <small>{{ toolDiagnosticsView.summary?.tool_search_active ? "tool_search 已启用" : "tool_search 未启用" }}</small>
+                  </article>
+                  <article>
+                    <span>工具集</span>
+                    <strong>{{ Object.keys(toolDiagnosticsView.summary?.toolsets || {}).length }}</strong>
+                    <small>按能力域分组</small>
+                  </article>
+                </div>
+                <div v-if="toolDiagnosticsView?.recommendations?.length" class="diagnostic-panel status-ready">
+                  <div>
+                    <strong>工具层建议</strong>
+                    <span>根据当前注册表和权限策略生成</span>
+                  </div>
+                  <ul>
+                    <li v-for="item in toolDiagnosticsView.recommendations" :key="item">
+                      <span>{{ item }}</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div class="tool-control-strip">
+                  <input v-model="toolQuery" type="text" placeholder="搜索工具、描述或工具集..." />
+                  <select v-model="toolExposureFilter" aria-label="工具暴露方式">
+                    <option value="all">全部方式</option>
+                    <option value="direct">直接可见</option>
+                    <option value="deferred">延迟检索</option>
+                    <option value="bridge">检索桥接</option>
+                  </select>
+                  <select v-model="toolRiskFilter" aria-label="工具风险等级">
+                    <option value="all">全部风险</option>
+                    <option value="low">低风险</option>
+                    <option value="medium">中风险</option>
+                    <option value="high">高风险</option>
+                    <option value="dynamic">动态判断</option>
+                  </select>
+                </div>
+
+                <div class="toolset-cloud" aria-label="工具集分布">
+                  <button
+                    v-for="item in toolsets"
+                    :key="item.name"
+                    type="button"
+                    :class="{ active: toolQuery === item.name }"
+                    @click="toolQuery = toolQuery === item.name ? '' : item.name"
+                  >
+                    <span>{{ item.name }}</span>
+                    <b>{{ item.count }}</b>
+                  </button>
+                </div>
+
+                <div class="tool-catalog">
+                  <article v-for="tool in filteredTools" :key="tool.name" class="tool-card" :class="`risk-${tool.risk || 'unknown'}`">
+                    <div class="tool-card-main">
+                      <span class="tool-card-icon">{{ tool.emoji || toolRiskIcon(tool.risk) }}</span>
+                      <span>
+                        <strong>{{ tool.name }}</strong>
+                        <small>{{ tool.description || "暂无描述" }}</small>
+                      </span>
+                    </div>
+                    <div class="tool-card-meta">
+                      <b :class="`risk-${tool.risk || 'unknown'}`">{{ toolRiskLabel(tool.risk) }}</b>
+                      <b>{{ toolPermissionLabel(tool.permission) }}</b>
+                      <b>{{ toolExposureLabel(tool.exposure) }}</b>
+                      <b>{{ tool.toolset || "core" }}</b>
+                    </div>
+                    <p v-if="tool.risk_reason" class="tool-risk-reason">{{ tool.risk_reason }}</p>
+                  </article>
+                  <ListRow v-if="!filteredTools.length" title="没有匹配的工具" description="换个关键词或清空筛选条件。" />
+                </div>
               </section>
 
               <section v-else-if="activeSection === 'memory'" class="settings-section">
@@ -565,9 +800,23 @@ const cronPrompt = ref("");
 const memoryQuery = ref("");
 const forgetId = ref("");
 const skillQuery = ref("");
+const selectedSkillName = ref("");
+const selectedSkillDetail = ref<any | null>(null);
+const skillEditorMode = ref<"idle" | "edit" | "create">("idle");
+const skillEditorContent = ref("");
+const skillEditorLoading = ref(false);
+const skillSaving = ref(false);
+const skillNotice = ref("");
+const skillCreateName = ref("");
+const skillCreateCategory = ref("custom");
+const toolQuery = ref("");
+const toolExposureFilter = ref("all");
+const toolRiskFilter = ref("all");
 const skillReloading = ref(false);
 const settingsNotice = ref("");
 const mcpNotice = ref("");
+const toolNotice = ref("");
+const diagnosticsLoading = ref("");
 const panelBusy = ref("");
 const modelSaving = ref(false);
 const skillStatsText = ref("");
@@ -580,6 +829,7 @@ const taskCommandText = ref("");
 const cronNotice = ref("");
 
 const modelConfigs = ref<any[]>([]);
+const modelDiagnostics = ref<any | null>(null);
 const selectedModelKey = ref("");
 const modelForm = ref({
   key: "",
@@ -593,6 +843,7 @@ const modelForm = ref({
 });
 
 const mcpConfigs = ref<any[]>([]);
+const mcpDiagnostics = ref<any | null>(null);
 const selectedMcpName = ref("");
 const mcpForm = ref({
   name: "",
@@ -606,6 +857,21 @@ const mcpForm = ref({
 const mcpArgsText = ref("");
 const mcpHeadersText = ref("{}");
 const mcpEnvText = ref("{}");
+const toolDiagnosticsOverride = ref<any | null>(null);
+
+const NEW_SKILL_TEMPLATE = `---
+name: my-skill
+description: Describe when Sierra should use this skill.
+---
+
+# My Skill
+
+Write the stable workflow here:
+
+1. When to use this skill.
+2. What Sierra should check first.
+3. Exact steps, commands, examples, and pitfalls.
+`;
 
 const sections: SettingsSectionMeta[] = [
   {
@@ -715,13 +981,20 @@ const sectionGroups = computed(() => {
 const models = computed(() => Array.isArray(props.payload?.identity.models) ? props.payload?.identity.models : []);
 const skills = computed(() => Array.isArray(props.payload?.skills?.items) ? props.payload?.skills?.items : []);
 const skillErrors = computed(() => Array.isArray(props.payload?.skills?.errors) ? props.payload?.skills?.errors : []);
+const skillOfferedCount = computed(() => skills.value.filter((skill: any) => skill.offered).length);
+const skillEditorTitle = computed(() => {
+  if (skillEditorMode.value === "create") {
+    return skillCreateName.value || "未命名 Skill";
+  }
+  return selectedSkillName.value || "未选择 Skill";
+});
 const filteredSkills = computed(() => {
   const query = skillQuery.value.trim().toLowerCase();
   if (!query) {
     return skills.value;
   }
   return skills.value.filter((skill: any) => {
-    return [skill.name, skill.category, skill.readiness_status]
+    return [skill.name, skill.category, skill.description, skill.readiness_status]
       .some((value) => String(value || "").toLowerCase().includes(query));
   });
 });
@@ -751,11 +1024,87 @@ const toolsets = computed(() => {
   const raw = props.payload?.tools?.toolsets || {};
   return Object.entries(raw).map(([name, count]) => ({ name, count }));
 });
+const tools = computed(() => {
+  return Array.isArray(props.payload?.tools?.items) ? props.payload?.tools?.items : [];
+});
+const filteredTools = computed(() => {
+  const query = toolQuery.value.trim().toLowerCase();
+  return tools.value.filter((tool: any) => {
+    const exposure = String(tool?.exposure || "direct");
+    const risk = String(tool?.risk || "unknown");
+    if (toolExposureFilter.value !== "all" && exposure !== toolExposureFilter.value) {
+      return false;
+    }
+    if (toolRiskFilter.value !== "all" && risk !== toolRiskFilter.value) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    return [
+      tool?.name,
+      tool?.description,
+      tool?.toolset,
+      tool?.risk,
+      tool?.permission,
+      tool?.exposure
+    ].some((value) => String(value || "").toLowerCase().includes(query));
+  });
+});
+const toolRiskCount = computed(() => {
+  return tools.value.reduce((acc: Record<string, number>, tool: any) => {
+    const risk = String(tool?.risk || "unknown");
+    acc[risk] = (acc[risk] || 0) + 1;
+    return acc;
+  }, {});
+});
+const toolPermissionCount = computed(() => {
+  return tools.value.reduce((acc: Record<string, number>, tool: any) => {
+    const permission = String(tool?.permission || "unknown");
+    acc[permission] = (acc[permission] || 0) + 1;
+    return acc;
+  }, {});
+});
 const activeModelConfig = computed(() => modelConfigs.value.find((item) => item.active) || null);
 const selectedModelIsActive = computed(() => {
   return Boolean(modelForm.value.key) && activeModelConfig.value?.key === modelForm.value.key;
 });
+const modelDiagnosticsItems = computed(() => {
+  return Array.isArray(modelDiagnostics.value?.items) ? modelDiagnostics.value.items : [];
+});
+const selectedModelDiagnostic = computed(() => modelDiagnostic(modelForm.value.key));
+const modelReadyCount = computed(() => modelDiagnosticsItems.value.filter((item: any) => ["active", "ready"].includes(String(item?.status))).length);
+const modelNeedsSetupCount = computed(() => modelDiagnosticsItems.value.filter((item: any) => ["needs_setup", "invalid"].includes(String(item?.status))).length);
+const modelVisionCount = computed(() => Number(modelDiagnostics.value?.summary?.vision_models || 0));
+const visionCapability = computed(() => {
+  const capabilities = props.payload?.auxiliary?.capabilities;
+  if (!Array.isArray(capabilities)) {
+    return null;
+  }
+  return capabilities.find((item: any) => String(item?.name || "").toLowerCase() === "vision") || null;
+});
+const auxiliaryVisionEnabled = computed(() => Boolean(visionCapability.value?.enabled));
+const effectiveVisionEnabled = computed(() => Boolean(modelForm.value.supports_vision || auxiliaryVisionEnabled.value));
+const visionStatusText = computed(() => {
+  if (modelForm.value.supports_vision) {
+    return "当前选中的主模型被标记为可直接分析图片。";
+  }
+  if (auxiliaryVisionEnabled.value) {
+    const model = String(visionCapability.value?.model || "辅助视觉模型");
+    const route = String(visionCapability.value?.route || visionCapability.value?.provider || "auxiliary");
+    return `辅助视觉已启用，将通过 ${model} 处理图片。路由: ${route}`;
+  }
+  return "请在 config.json 的 auxiliary.vision 中启用辅助视觉，或把真正的多模态主模型标记为原生视觉。";
+});
 const enabledMcpCount = computed(() => mcpConfigs.value.filter((server) => server.enabled !== false).length);
+const mcpDiagnosticsItems = computed(() => {
+  return Array.isArray(mcpDiagnostics.value?.items) ? mcpDiagnostics.value.items : [];
+});
+const selectedMcpDiagnostic = computed(() => mcpDiagnostic(mcpForm.value.name));
+const mcpRunningCount = computed(() => Number(mcpDiagnostics.value?.summary?.running || 0));
+const mcpNeedsSetupCount = computed(() => mcpDiagnosticsItems.value.filter((item: any) => ["needs_setup", "failed", "invalid"].includes(String(item?.status))).length);
+const mcpToolCount = computed(() => Number(mcpDiagnostics.value?.summary?.tools || 0));
+const toolDiagnosticsView = computed(() => toolDiagnosticsOverride.value || props.payload?.tools?.diagnostics || null);
 const integrationChannels = [
   {
     name: "Web",
@@ -881,6 +1230,7 @@ async function loadModelConfig() {
       throw new Error(data.text || data.error || `Model config API ${response.status}`);
     }
     modelConfigs.value = Array.isArray(data.models) ? data.models : [];
+    modelDiagnostics.value = data.diagnostics || null;
     if (!selectedModelKey.value && modelConfigs.value.length) {
       selectModel(modelConfigs.value.find((model) => model.active) || modelConfigs.value[0]);
     } else if (selectedModelKey.value) {
@@ -892,6 +1242,29 @@ async function loadModelConfig() {
   } catch (err) {
     settingsNotice.value = `加载模型配置失败: ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+async function loadModelDiagnostics() {
+  diagnosticsLoading.value = "models";
+  settingsNotice.value = "";
+  try {
+    const response = await fetch("/api/config/models/diagnostics");
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.text || data.error || `Model diagnostics API ${response.status}`);
+    }
+    modelDiagnostics.value = data.diagnostics || null;
+    settingsNotice.value = "模型诊断已更新。";
+  } catch (err) {
+    settingsNotice.value = `模型诊断失败: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    diagnosticsLoading.value = "";
+  }
+}
+
+function modelDiagnostic(key: any) {
+  const normalized = String(key || "");
+  return modelDiagnosticsItems.value.find((item: any) => String(item?.key || "") === normalized) || null;
 }
 
 function selectModel(model: any) {
@@ -1027,8 +1400,16 @@ async function saveModel(options: { pendingText?: string } | Event = {}) {
     }
     settingsNotice.value = data.text || "模型配置已保存。";
     modelConfigs.value = Array.isArray(data.models) ? data.models : modelConfigs.value;
-    selectedModelKey.value = modelForm.value.key;
-    modelForm.value.api_key = "";
+    modelDiagnostics.value = data.diagnostics || modelDiagnostics.value;
+    const savedKey = modelForm.value.key;
+    const savedModel = modelConfigs.value.find((model) => model.key === savedKey);
+    if (savedModel) {
+      selectModel(savedModel);
+    } else {
+      selectedModelKey.value = savedKey;
+      modelForm.value.api_key = "";
+    }
+    settingsNotice.value = data.text || "模型配置已保存。";
     emit("refresh");
     return true;
   } catch (err) {
@@ -1061,6 +1442,7 @@ async function deleteModel(key: string) {
     }
     settingsNotice.value = data.text || "模型配置已删除。";
     modelConfigs.value = Array.isArray(data.models) ? data.models : [];
+    modelDiagnostics.value = data.diagnostics || modelDiagnostics.value;
     newModel();
     emit("refresh");
   } catch (err) {
@@ -1070,17 +1452,128 @@ async function deleteModel(key: string) {
 
 async function reloadSkills() {
   skillReloading.value = true;
+  skillNotice.value = "";
   try {
     const response = await fetch("/api/skills/reload", { method: "POST" });
     const data = await response.json();
     if (!response.ok || !data.ok) {
       throw new Error(data.text || data.error || `Skills API ${response.status}`);
     }
+    const notice = data.text || "Skill 索引已重新加载。";
     emit("refresh");
+    if (selectedSkillName.value && skillEditorMode.value === "edit") {
+      await selectSkill(selectedSkillName.value);
+    }
+    skillNotice.value = notice;
   } catch (err) {
-    settingsNotice.value = `重新加载 Skill 失败: ${err instanceof Error ? err.message : String(err)}`;
+    skillNotice.value = `重新加载 Skill 失败: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
     skillReloading.value = false;
+  }
+}
+
+async function selectSkill(name: string) {
+  if (!name) {
+    return;
+  }
+  selectedSkillName.value = name;
+  selectedSkillDetail.value = null;
+  skillEditorMode.value = "edit";
+  skillEditorLoading.value = true;
+  skillNotice.value = "";
+  try {
+    const response = await fetch(`/api/skills/${encodeURIComponent(name)}`);
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.detail || data.text || data.error || `Skill API ${response.status}`);
+    }
+    selectedSkillDetail.value = data.skill || null;
+    skillEditorContent.value = String(data.content || "");
+  } catch (err) {
+    skillNotice.value = `读取 Skill 失败: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    skillEditorLoading.value = false;
+  }
+}
+
+function newSkill() {
+  selectedSkillName.value = "";
+  selectedSkillDetail.value = null;
+  skillEditorMode.value = "create";
+  skillEditorContent.value = NEW_SKILL_TEMPLATE;
+  skillCreateName.value = "";
+  skillCreateCategory.value = "custom";
+  skillNotice.value = "";
+}
+
+function resetSkillEditor() {
+  selectedSkillName.value = "";
+  selectedSkillDetail.value = null;
+  skillEditorMode.value = "idle";
+  skillEditorContent.value = "";
+  skillCreateName.value = "";
+  skillCreateCategory.value = "custom";
+  skillNotice.value = "";
+}
+
+function skillContentWithName(content: string, name: string) {
+  const cleanName = name.trim();
+  if (!cleanName) {
+    return content;
+  }
+  if (/(\r?\nname:\s*)[^\r\n]+/.test(content)) {
+    return content.replace(/(\r?\nname:\s*)[^\r\n]+/, (_match, prefix) => `${prefix}${cleanName}`);
+  }
+  if (/^---\s*\r?\n/.test(content)) {
+    return content.replace(/^---\s*\r?\n/, `---\nname: ${cleanName}\n`);
+  }
+  return content;
+}
+
+async function saveSkill() {
+  if (skillSaving.value) {
+    return;
+  }
+  skillNotice.value = "";
+  skillSaving.value = true;
+  try {
+    const creating = skillEditorMode.value === "create";
+    const endpoint = creating
+      ? "/api/skills"
+      : `/api/skills/${encodeURIComponent(selectedSkillName.value)}`;
+    const content = creating
+      ? skillContentWithName(skillEditorContent.value, skillCreateName.value.trim())
+      : skillEditorContent.value;
+    if (creating) {
+      skillEditorContent.value = content;
+    }
+    const body = creating
+      ? {
+          name: skillCreateName.value.trim(),
+          category: skillCreateCategory.value.trim() || "custom",
+          content
+        }
+      : { content };
+    const response = await fetch(endpoint, {
+      method: creating ? "POST" : "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.detail || data.text || data.error || `Skill API ${response.status}`);
+    }
+    const savedName = String(data.name || skillCreateName.value || selectedSkillName.value);
+    const notice = data.text || "Skill 已保存。";
+    emit("refresh");
+    if (savedName) {
+      await selectSkill(savedName);
+    }
+    skillNotice.value = notice;
+  } catch (err) {
+    skillNotice.value = `保存 Skill 失败: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    skillSaving.value = false;
   }
 }
 
@@ -1092,6 +1585,7 @@ async function loadMcpConfig() {
       throw new Error(data.text || data.error || `MCP config API ${response.status}`);
     }
     mcpConfigs.value = Array.isArray(data.servers) ? data.servers : [];
+    mcpDiagnostics.value = data.diagnostics || null;
     if (!selectedMcpName.value && mcpConfigs.value.length) {
       selectMcp(mcpConfigs.value[0]);
     } else if (selectedMcpName.value) {
@@ -1103,6 +1597,29 @@ async function loadMcpConfig() {
   } catch (err) {
     mcpNotice.value = `加载 MCP 配置失败: ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+async function loadMcpDiagnostics() {
+  diagnosticsLoading.value = "mcp";
+  mcpNotice.value = "";
+  try {
+    const response = await fetch("/api/config/mcp/diagnostics");
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.text || data.error || `MCP diagnostics API ${response.status}`);
+    }
+    mcpDiagnostics.value = data.diagnostics || null;
+    mcpNotice.value = "MCP 诊断已更新。";
+  } catch (err) {
+    mcpNotice.value = `MCP 诊断失败: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    diagnosticsLoading.value = "";
+  }
+}
+
+function mcpDiagnostic(name: any) {
+  const normalized = String(name || "");
+  return mcpDiagnosticsItems.value.find((item: any) => String(item?.name || "") === normalized) || null;
 }
 
 function selectMcp(server: any) {
@@ -1165,6 +1682,7 @@ async function saveMcp() {
     }
     mcpNotice.value = data.text || "MCP 配置已保存。";
     mcpConfigs.value = Array.isArray(data.servers) ? data.servers : mcpConfigs.value;
+    mcpDiagnostics.value = data.diagnostics || mcpDiagnostics.value;
     selectedMcpName.value = mcpForm.value.name;
     emit("refresh");
   } catch (err) {
@@ -1184,6 +1702,7 @@ async function deleteMcp(name: string) {
     }
     mcpNotice.value = data.text || "MCP 配置已删除。";
     mcpConfigs.value = Array.isArray(data.servers) ? data.servers : [];
+    mcpDiagnostics.value = data.diagnostics || mcpDiagnostics.value;
     newMcp();
     emit("refresh");
   } catch (err) {
@@ -1315,6 +1834,86 @@ async function removeCron(task: any) {
   }
   const data = await runPanelCommand({ command: "cron_remove", id, text: `/cron-remove ${id}` });
   cronNotice.value = data.text || "";
+}
+
+async function loadToolDiagnostics() {
+  diagnosticsLoading.value = "tools";
+  toolNotice.value = "";
+  try {
+    const response = await fetch("/api/tools/diagnostics");
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.text || data.error || `Tools diagnostics API ${response.status}`);
+    }
+    toolDiagnosticsOverride.value = data.diagnostics || null;
+    toolNotice.value = "工具诊断已更新。";
+  } catch (err) {
+    toolNotice.value = `工具诊断失败: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    diagnosticsLoading.value = "";
+  }
+}
+
+function toolRiskLabel(risk: any) {
+  const value = String(risk || "unknown");
+  if (value === "low") {
+    return "低风险";
+  }
+  if (value === "medium") {
+    return "中风险";
+  }
+  if (value === "high") {
+    return "高风险";
+  }
+  if (value === "dynamic") {
+    return "动态判断";
+  }
+  return "未知风险";
+}
+
+function toolRiskIcon(risk: any) {
+  const value = String(risk || "unknown");
+  if (value === "low") {
+    return "🍃";
+  }
+  if (value === "medium") {
+    return "💎";
+  }
+  if (value === "high") {
+    return "🔥";
+  }
+  if (value === "dynamic") {
+    return "🧭";
+  }
+  return "✨";
+}
+
+function toolPermissionLabel(permission: any) {
+  const value = String(permission || "unknown");
+  if (value === "allow") {
+    return "自动运行";
+  }
+  if (value === "ask") {
+    return "需要确认";
+  }
+  if (value === "deny") {
+    return "已禁用";
+  }
+  if (value === "dynamic") {
+    return "按目标判断";
+  }
+  return "未配置";
+}
+
+function toolExposureLabel(exposure: any) {
+  const value = String(exposure || "direct");
+  if (value === "deferred") {
+    return "延迟检索";
+  }
+  if (value === "bridge") {
+    return "检索桥接";
+  }
+  return "直接可见";
 }
 
 function memoryResultKey(item: any) {

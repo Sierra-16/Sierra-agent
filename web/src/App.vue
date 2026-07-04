@@ -493,10 +493,11 @@ function handleActivityEvent(event: any) {
 
   if (type === "tool_start" || type === "tool") {
     const name = String(event.name || "tool");
+    const copy = toolEventCopy(name);
     upsertActivity(`tool:${name}`, {
       type: "tool",
-      label: "调用工具",
-      detail: "正在执行。",
+      label: copy.activeLabel,
+      detail: copy.activeDetail,
       status: "active",
       toolName: name,
       progress: 64
@@ -506,11 +507,13 @@ function handleActivityEvent(event: any) {
 
   if (type === "tool_result") {
     const name = String(event.name || "tool");
+    const copy = toolEventCopy(name);
+    const failed = event.success === false;
     upsertActivity(`tool:${name}`, {
       type: "tool",
-      label: event.success === false ? "工具失败" : "工具完成",
-      detail: event.text ? String(event.text) : "执行完成。",
-      status: event.success === false ? "error" : "done",
+      label: failed ? copy.errorLabel : copy.doneLabel,
+      detail: event.text ? String(event.text) : copy.doneDetail,
+      status: failed ? "error" : "done",
       toolName: name,
       progress: 100
     });
@@ -519,10 +522,11 @@ function handleActivityEvent(event: any) {
 
   if (type === "tool_approval_waiting") {
     const name = String(event.name || "tool");
+    const copy = toolEventCopy(name);
     upsertActivity(`approval-waiting:${name}`, {
       type: "approval",
-      label: "需要确认",
-      detail: "Sierra 需要你的许可才能继续执行这个工具。",
+      label: copy.approvalLabel,
+      detail: copy.approvalDetail,
       status: "active",
       toolName: name,
       risk: String(event.risk || "")
@@ -533,11 +537,12 @@ function handleActivityEvent(event: any) {
   if (type === "tool_approval_request") {
     const approvalId = String(event.id || "");
     const name = String(event.name || "tool");
+    const copy = toolEventCopy(name);
     activityEvents.value = activityEvents.value.filter((item) => item.id !== `approval-waiting:${name}`);
     upsertActivity(`approval:${approvalId}`, {
       type: "approval",
-      label: "需要确认",
-      detail: "请选择是否允许 Sierra 执行这个工具。",
+      label: copy.approvalLabel,
+      detail: copy.approvalDetail,
       status: "active",
       toolName: name,
       approvalId,
@@ -691,6 +696,29 @@ function handleActivityEvent(event: any) {
       status: "error"
     });
   }
+}
+
+function toolEventCopy(name: string) {
+  if (name === "vision_analyze") {
+    return {
+      activeLabel: "分析图片",
+      activeDetail: "正在把图片交给视觉模型解析。",
+      doneLabel: "图片分析完成",
+      doneDetail: "视觉结果已返回。",
+      errorLabel: "图片分析失败",
+      approvalLabel: "需要确认图片分析",
+      approvalDetail: "Sierra 需要把这张图片发送给视觉模型。"
+    };
+  }
+  return {
+    activeLabel: "调用工具",
+    activeDetail: "正在执行。",
+    doneLabel: "工具完成",
+    doneDetail: "执行完成。",
+    errorLabel: "工具失败",
+    approvalLabel: "需要确认",
+    approvalDetail: "Sierra 需要你的许可才能继续执行这个工具。"
+  };
 }
 
 function stringifyArguments(value: any) {

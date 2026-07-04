@@ -14,6 +14,8 @@ try:
     from fastapi.testclient import TestClient
 
     from aiagent.dashboard_api import create_dashboard_app
+    from aiagent.skills.loader import SkillLoader
+    from aiagent.skills.prompt_index import SkillPromptIndex
 except ModuleNotFoundError as exc:
     TestClient = None
     create_dashboard_app = None
@@ -178,6 +180,31 @@ class ApprovalFakeAgent(FakeAgent):
         return f"decision:{decision}"
 
 
+class SkillApiFakeAgent(FakeAgent):
+    def __init__(self, skills_dir):
+        self.skill_loader = SkillLoader(str(skills_dir))
+        self.skills = self.skill_loader.load()
+        self.skill_index = SkillPromptIndex({})
+        self.tools = FakeTools()
+
+    def reload_skills(self):
+        self.skills = self.skill_loader.reload()
+        self.skill_index.clear_cache()
+        return {
+            "ok": not self.skill_loader.errors,
+            "count": len(self.skills),
+            "skills": self.skill_summaries(include_unavailable=True),
+            "errors": list(self.skill_loader.errors),
+        }
+
+    def skill_summaries(self, include_unavailable=False):
+        return self.skill_index.summaries(
+            self.skills,
+            available_tools=self.tools.names(),
+            include_unavailable=include_unavailable,
+        )
+
+
 @unittest.skipIf(FASTAPI_IMPORT_ERROR is not None, f"FastAPI unavailable: {FASTAPI_IMPORT_ERROR}")
 class DashboardApiTest(unittest.TestCase):
     def test_dashboard_payload_is_structured(self):
@@ -199,8 +226,129 @@ class DashboardApiTest(unittest.TestCase):
         self.assertEqual(payload["identity"]["model"], "test-model")
         self.assertEqual(payload["usage"]["percent"], 50)
         self.assertEqual(payload["tools"]["total"], 2)
+        read_tool = next(item for item in payload["tools"]["items"] if item["name"] == "read_file")
+        self.assertEqual(read_tool["risk"], "low")
+        self.assertEqual(read_tool["exposure"], "direct")
+        self.assertIn("description", read_tool)
+        self.assertEqual(payload["tools"]["diagnostics"]["summary"]["total"], 2)
         self.assertEqual(payload["memory"]["providers"][0]["records"], 3)
         self.assertEqual(payload["mcp"]["servers"][0]["name"], "demo")
+
+    def test_diagnostics_endpoints_report_model_mcp_and_tool_health(self):
+        config = {
+            "active_model": "ready",
+            "models": {
+                "ready": {
+                    "name": "ready-model",
+                    "base_url": "https://ready.example/v1",
+                    "api_key": "ready-key",
+                    "max_tokens": 4096,
+                    "context_window": 128000,
+                },
+                "missing": {
+                    "name": "missing-model",
+                    "base_url": "",
+                    "api_key": "YOUR_API_KEY",
+                },
+            },
+            "mcpServers": {
+                "demo": {
+                    "type": "stdio",
+                    "command": "definitely_missing_sierra_mcp_command",
+                    "enabled": True,
+                }
+            },
+        }
+        app = create_dashboard_app(
+            FakeAgent(),
+            config=config,
+            sierra_dir=".",
+            static_dir="missing-dist",
+        )
+        client = TestClient(app)
+
+        model_response = client.get("/api/config/models/diagnostics")
+        mcp_response = client.get("/api/config/mcp/diagnostics")
+        tool_response = client.get("/api/tools/diagnostics")
+
+        self.assertEqual(model_response.status_code, 200)
+        model_items = model_response.json()["diagnostics"]["items"]
+        self.assertEqual(next(item for item in model_items if item["key"] == "ready")["status"], "active")
+        self.assertEqual(next(item for item in model_items if item["key"] == "missing")["status"], "needs_setup")
+        self.assertEqual(mcp_response.status_code, 200)
+        mcp_items = mcp_response.json()["diagnostics"]["items"]
+        self.assertEqual(mcp_items[0]["name"], "demo")
+        self.assertTrue(mcp_items[0]["issues"])
+        self.assertEqual(tool_response.status_code, 200)
+        self.assertEqual(tool_response.json()["diagnostics"]["summary"]["total"], 2)
+
+    def test_skill_api_reads_creates_and_updates_documents(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            skills_dir = Path(temp_dir) / "skills"
+            demo_dir = skills_dir / "custom" / "demo-skill"
+            demo_dir.mkdir(parents=True)
+            demo_path = demo_dir / "SKILL.md"
+            demo_path.write_text(
+                "---\n"
+                "name: demo-skill\n"
+                "description: Demo skill.\n"
+                "---\n\n"
+                "# Demo\n\n"
+                "Follow the demo workflow.\n",
+                encoding="utf-8",
+            )
+            agent = SkillApiFakeAgent(skills_dir)
+            app = create_dashboard_app(
+                agent,
+                config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+                sierra_dir=".",
+                static_dir="missing-dist",
+            )
+            client = TestClient(app)
+
+            catalog_response = client.get("/api/skills")
+            detail_response = client.get("/api/skills/demo-skill")
+            update_response = client.put(
+                "/api/skills/demo-skill",
+                json={
+                    "content": (
+                        "---\n"
+                        "name: demo-skill\n"
+                        "description: Updated skill.\n"
+                        "---\n\n"
+                        "# Demo\n\n"
+                        "Use the updated workflow.\n"
+                    )
+                },
+            )
+            create_response = client.post(
+                "/api/skills",
+                json={
+                    "name": "new-skill",
+                    "category": "custom",
+                    "content": (
+                        "---\n"
+                        "name: new-skill\n"
+                        "description: New skill.\n"
+                        "---\n\n"
+                        "# New Skill\n\n"
+                        "Use the new workflow.\n"
+                    ),
+                },
+            )
+
+            self.assertEqual(catalog_response.status_code, 200)
+            self.assertTrue(any(item["name"] == "demo-skill" for item in catalog_response.json()["items"]))
+            self.assertEqual(detail_response.status_code, 200)
+            self.assertIn("Follow the demo workflow.", detail_response.json()["content"])
+            self.assertEqual(update_response.status_code, 200)
+            self.assertTrue(update_response.json()["ok"])
+            self.assertIn("Use the updated workflow.", demo_path.read_text(encoding="utf-8"))
+            self.assertEqual(agent.skill_loader.get("demo-skill").description, "Updated skill.")
+            self.assertEqual(create_response.status_code, 200)
+            self.assertTrue(create_response.json()["ok"])
+            self.assertIsNotNone(agent.skill_loader.get("new-skill"))
+            self.assertTrue((skills_dir / "custom" / "new-skill" / "SKILL.md").exists())
 
     def test_chat_endpoint_returns_answer(self):
         app = create_dashboard_app(

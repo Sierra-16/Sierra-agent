@@ -30,7 +30,8 @@
       "update_plan",
       "get_plan",
       "resolve_task_execution",
-      "cron_list"
+      "cron_list",
+      "vision_analyze"
     ],
     "ask": [
       "write_file",
@@ -46,7 +47,6 @@
       "powershell",
       "terminal",
       "execute_code",
-      "vision_analyze",
       "browser_click",
       "browser_type",
       "browser_press",

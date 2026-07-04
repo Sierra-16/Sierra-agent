@@ -7,6 +7,8 @@ import mimetypes
 import os
 import queue
 import re
+import shutil
+import tempfile
 import threading
 import uuid
 from datetime import datetime
@@ -26,8 +28,12 @@ from .config_validation import (
 )
 from .auxiliary_config import auxiliary_status
 from .gateway import GatewayRuntime, sanitize_gateway_event
-from .safety import sanitize_text
+from .safety import SafetyGate, sanitize_text
+from .skills.loader import SkillLoader
 from .tools.registry import BRIDGE_TOOL_NAMES
+
+
+MAX_SKILL_CONTENT_BYTES = 256 * 1024
 
 
 class ChatRequest(BaseModel):
@@ -88,6 +94,16 @@ class MCPServerConfigRequest(BaseModel):
     enabled: bool = True
 
 
+class SkillCreateRequest(BaseModel):
+    name: str = Field(default="", max_length=120)
+    category: str = Field(default="custom", max_length=120)
+    content: str = Field(min_length=1, max_length=MAX_SKILL_CONTENT_BYTES)
+
+
+class SkillContentRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=MAX_SKILL_CONTENT_BYTES)
+
+
 def create_dashboard_app(
     agent: Any,
     *,
@@ -145,6 +161,15 @@ def create_dashboard_app(
             "ok": True,
             "active": str(config.get("active_model") or ""),
             "models": _models_from_config(config, include_details=True),
+            "diagnostics": _model_diagnostics(config),
+        }
+
+    @app.get("/api/config/models/diagnostics")
+    def config_models_diagnostics() -> dict[str, Any]:
+        config = app.state.config if isinstance(app.state.config, dict) else {}
+        return {
+            "ok": True,
+            "diagnostics": _model_diagnostics(config),
         }
 
     @app.post("/api/config/models")
@@ -164,6 +189,15 @@ def create_dashboard_app(
             "ok": True,
             "servers": _safe_mcp_servers(config),
             "status": _mcp(app.state.gateway.agent),
+            "diagnostics": _mcp_diagnostics(config, app.state.gateway.agent),
+        }
+
+    @app.get("/api/config/mcp/diagnostics")
+    def config_mcp_diagnostics() -> dict[str, Any]:
+        config = app.state.config if isinstance(app.state.config, dict) else {}
+        return {
+            "ok": True,
+            "diagnostics": _mcp_diagnostics(config, app.state.gateway.agent),
         }
 
     @app.post("/api/config/mcp")
@@ -175,6 +209,13 @@ def create_dashboard_app(
     def delete_mcp_config(server_name: str) -> dict[str, Any]:
         with app.state.chat_lock:
             return _delete_mcp_config(app, server_name)
+
+    @app.get("/api/tools/diagnostics")
+    def tools_diagnostics() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "diagnostics": _tools(app.state.gateway.agent).get("diagnostics", {}),
+        }
 
     @app.post("/api/skills/reload")
     def reload_skills_endpoint() -> dict[str, Any]:
@@ -189,6 +230,28 @@ def create_dashboard_app(
                 "errors": result.get("errors", []),
                 "text": f"技能已重新加载，共 {result.get('count', len(result.get('skills', []) or []))} 个。",
             }
+
+    @app.get("/api/skills")
+    def skills_catalog() -> dict[str, Any]:
+        agent_ref = app.state.gateway.agent
+        return {
+            "ok": True,
+            **_skills(agent_ref),
+        }
+
+    @app.get("/api/skills/{skill_name}")
+    def skill_detail(skill_name: str) -> dict[str, Any]:
+        return _read_skill_detail(app.state.gateway.agent, skill_name)
+
+    @app.post("/api/skills")
+    def create_skill(request: SkillCreateRequest) -> dict[str, Any]:
+        with app.state.chat_lock:
+            return _create_skill_from_document(app.state.gateway.agent, request)
+
+    @app.put("/api/skills/{skill_name}")
+    def update_skill(skill_name: str, request: SkillContentRequest) -> dict[str, Any]:
+        with app.state.chat_lock:
+            return _update_skill_document(app.state.gateway.agent, skill_name, request)
 
     @app.post("/api/chat")
     def chat(request: ChatRequest) -> dict[str, Any]:
@@ -885,6 +948,93 @@ def _models_from_config(config: dict[str, Any], *, include_details: bool = False
     return models
 
 
+def _model_diagnostics(config: dict[str, Any]) -> dict[str, Any]:
+    active = str(config.get("active_model") or "")
+    raw_models = config.get("models") if isinstance(config.get("models"), dict) else {}
+    items = []
+    for key, value in raw_models.items():
+        issues = []
+        if not _safe_config_key(str(key)):
+            issues.append(_diagnostic_issue("key", "模型 key 只能包含字母、数字、下划线、短横线和点。"))
+        if not isinstance(value, dict):
+            items.append({
+                "key": str(key),
+                "name": str(key),
+                "active": str(key) == active,
+                "status": "invalid",
+                "status_label": "配置无效",
+                "issues": [_diagnostic_issue(f"models.{key}", "模型配置必须是对象。")],
+            })
+            continue
+
+        name = str(value.get("name") or "").strip()
+        base_url = str(value.get("base_url") or "").strip()
+        api_key = str(value.get("api_key") or "").strip()
+        max_tokens = _int(value.get("max_tokens"), 0)
+        context_window = _int(value.get("context_window"), 0)
+        temperature = value.get("temperature", 0.7)
+
+        if not name:
+            issues.append(_diagnostic_issue(f"models.{key}.name", "模型名不能为空。"))
+        if not base_url:
+            issues.append(_diagnostic_issue(f"models.{key}.base_url", "Base URL 不能为空。"))
+        elif not re.match(r"^https?://", base_url, re.IGNORECASE):
+            issues.append(_diagnostic_issue(f"models.{key}.base_url", "Base URL 应该以 http:// 或 https:// 开头。"))
+        if not _secret_is_configured(api_key):
+            issues.append(_diagnostic_issue(f"models.{key}.api_key", "API key 还没有配置。"))
+        if max_tokens <= 0:
+            issues.append(_diagnostic_issue(f"models.{key}.max_tokens", "输出上限必须大于 0。"))
+        if context_window <= 0:
+            issues.append(_diagnostic_issue(f"models.{key}.context_window", "上下文窗口必须大于 0。"))
+        try:
+            temp = float(temperature)
+            if temp < 0 or temp > 2:
+                issues.append(_diagnostic_issue(f"models.{key}.temperature", "温度建议保持在 0 到 2 之间。"))
+        except (TypeError, ValueError):
+            issues.append(_diagnostic_issue(f"models.{key}.temperature", "温度必须是数字。"))
+
+        if issues:
+            status = "needs_setup"
+            status_label = "需要配置"
+        elif str(key) == active:
+            status = "active"
+            status_label = "当前可用"
+        else:
+            status = "ready"
+            status_label = "可切换"
+        items.append({
+            "key": str(key),
+            "name": name or str(key),
+            "active": str(key) == active,
+            "status": status,
+            "status_label": status_label,
+            "base_url_set": bool(base_url),
+            "api_key_set": _secret_is_configured(api_key),
+            "context_window": context_window,
+            "max_tokens": max_tokens,
+            "supports_vision": bool(value.get("supports_vision", False)),
+            "issues": issues,
+        })
+
+    if active and active not in raw_models:
+        items.append({
+            "key": active,
+            "name": active,
+            "active": True,
+            "status": "invalid",
+            "status_label": "当前模型不存在",
+            "issues": [_diagnostic_issue("active_model", f"当前模型 '{active}' 不在 models 中。")],
+        })
+
+    summary = _diagnostic_summary(items)
+    summary.update({
+        "active": active,
+        "total": len(items),
+        "vision_models": len([item for item in items if item.get("supports_vision")]),
+    })
+    return {"summary": summary, "items": items}
+
+
 def _switch_model(app: FastAPI, model_key: str) -> dict[str, Any]:
     model_key = sanitize_text(model_key.strip(), max_length=200)
     config = app.state.config if isinstance(app.state.config, dict) else {}
@@ -947,6 +1097,7 @@ def _save_model_config(app: FastAPI, request: ModelConfigRequest) -> dict[str, A
             "ok": False,
             "text": format_config_issues(exc.issues),
             "models": _models_from_config(config, include_details=True),
+            "diagnostics": _model_diagnostics(config),
         }
 
     _write_dashboard_config(app)
@@ -963,6 +1114,7 @@ def _save_model_config(app: FastAPI, request: ModelConfigRequest) -> dict[str, A
         "text": f"模型配置已保存: {model_key}" + ("，当前 Agent 已热重载。" if reloaded else "。"),
         "active": str(config.get("active_model") or ""),
         "models": _models_from_config(config, include_details=True),
+        "diagnostics": _model_diagnostics(config),
     }
 
 
@@ -984,6 +1136,7 @@ def _delete_model_config(app: FastAPI, model_key: str) -> dict[str, Any]:
         "text": f"模型配置已删除: {model_key}",
         "active": str(config.get("active_model") or ""),
         "models": _models_from_config(config, include_details=True),
+        "diagnostics": _model_diagnostics(config),
     }
 
 
@@ -1030,6 +1183,7 @@ def _save_mcp_config(app: FastAPI, request: MCPServerConfigRequest) -> dict[str,
         "text": f"MCP 配置已保存并重新加载: {name}",
         "servers": _safe_mcp_servers(config),
         "status": _mcp(app.state.gateway.agent),
+        "diagnostics": _mcp_diagnostics(config, app.state.gateway.agent),
     }
 
 
@@ -1050,6 +1204,7 @@ def _delete_mcp_config(app: FastAPI, server_name: str) -> dict[str, Any]:
         "text": f"MCP 配置已删除并重新加载: {name}",
         "servers": _safe_mcp_servers(config),
         "status": _mcp(app.state.gateway.agent),
+        "diagnostics": _mcp_diagnostics(config, app.state.gateway.agent),
     }
 
 
@@ -1189,6 +1344,110 @@ def _safe_mcp_servers(config: dict[str, Any]) -> list[dict[str, Any]]:
     return servers
 
 
+def _mcp_diagnostics(config: dict[str, Any], agent: Any) -> dict[str, Any]:
+    configured = _safe_mcp_servers(config)
+    raw_servers = config.get("mcpServers") if isinstance(config.get("mcpServers"), dict) else {}
+    runtime_status = _mcp(agent)
+    runtime_servers = runtime_status.get("servers") if isinstance(runtime_status.get("servers"), list) else []
+    runtime_by_name = {
+        str(server.get("name") or server.get("id") or ""): server
+        for server in runtime_servers
+        if isinstance(server, dict)
+    }
+    items = []
+    for server in configured:
+        name = str(server.get("name") or "")
+        transport = str(server.get("type") or "stdio")
+        enabled = bool(server.get("enabled", True))
+        raw_server = raw_servers.get(name) if isinstance(raw_servers.get(name), dict) else {}
+        runtime = runtime_by_name.get(name, {})
+        runtime_state = str(runtime.get("status") or "").strip()
+        runtime_running = bool(runtime.get("running")) or runtime_state == "running"
+        runtime_error = str(runtime.get("error") or "").strip()
+        tools_count = _int(runtime.get("tools"), 0)
+        issues = []
+        if not enabled:
+            status = "disabled"
+            status_label = "已停用"
+        else:
+            if transport == "streamablehttp":
+                if not str(raw_server.get("url") or "").strip():
+                    issues.append(_diagnostic_issue(f"mcpServers.{name}.url", "远程 MCP 需要填写 URL。"))
+                headers = raw_server.get("headers") if isinstance(raw_server.get("headers"), dict) else {}
+                for header_name, value in headers.items():
+                    if not _secret_is_configured(value):
+                        issues.append(_diagnostic_issue(
+                            f"mcpServers.{name}.headers.{header_name}",
+                            "Header 中的凭据还没有配置。",
+                        ))
+            else:
+                command = str(server.get("command") or "").strip()
+                if not command:
+                    issues.append(_diagnostic_issue(f"mcpServers.{name}.command", "本地 MCP 需要填写 command。"))
+                elif shutil.which(command) is None and not Path(command).exists():
+                    issues.append(_diagnostic_issue(
+                        f"mcpServers.{name}.command",
+                        f"当前系统找不到命令：{command}",
+                        "如果命令需要完整路径，可以在 command 中填写绝对路径。",
+                    ))
+                env = raw_server.get("env") if isinstance(raw_server.get("env"), dict) else {}
+                for env_name, value in env.items():
+                    if not _secret_is_configured(value):
+                        issues.append(_diagnostic_issue(
+                            f"mcpServers.{name}.env.{env_name}",
+                            "Env 中的凭据还没有配置。",
+                        ))
+            if runtime_error:
+                issues.append(_diagnostic_issue(f"mcpServers.{name}.runtime", runtime_error))
+
+            if runtime_running:
+                status = "running"
+                status_label = "运行中"
+            elif issues:
+                status = "needs_setup"
+                status_label = "需要处理"
+            elif runtime:
+                status = runtime_state or "configured"
+                status_label = "已配置"
+            else:
+                status = "configured"
+                status_label = "等待启动"
+        items.append({
+            "name": name,
+            "transport": transport,
+            "enabled": enabled,
+            "status": status,
+            "status_label": status_label,
+            "tools": tools_count,
+            "runtime": runtime,
+            "issues": issues,
+        })
+
+    configured_names = {str(server.get("name") or "") for server in configured}
+    for name, runtime in runtime_by_name.items():
+        if not name or name in configured_names:
+            continue
+        items.append({
+            "name": name,
+            "transport": runtime.get("transport") or runtime.get("type") or "unknown",
+            "enabled": True,
+            "status": str(runtime.get("status") or "runtime_only"),
+            "status_label": "运行时服务",
+            "tools": _int(runtime.get("tools"), 0),
+            "runtime": runtime,
+            "issues": [],
+        })
+
+    summary = _diagnostic_summary(items)
+    summary.update({
+        "total": len(items),
+        "enabled": len([item for item in items if item.get("enabled")]),
+        "running": len([item for item in items if item.get("status") == "running"]),
+        "tools": sum(_int(item.get("tools"), 0) for item in items),
+    })
+    return {"summary": summary, "items": items}
+
+
 def _masked_secret_dict(value: Any) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -1214,6 +1473,45 @@ def _mask_secret(value: str) -> str:
 def _is_masked_secret(value: str) -> bool:
     text = str(value or "").strip()
     return not text or text == "********" or ("..." in text and len(text) <= 32)
+
+
+def _secret_is_configured(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    placeholder_bits = (
+        "your_",
+        "your-",
+        "your ",
+        "replace",
+        "placeholder",
+        "todo",
+        "example",
+    )
+    if lowered in {"sk-...", "token", "api_key", "apikey", "none", "null"}:
+        return False
+    if any(bit in lowered for bit in placeholder_bits):
+        return False
+    return True
+
+
+def _diagnostic_issue(path: str, message: str, hint: str = "") -> dict[str, str]:
+    item = {
+        "path": sanitize_text(str(path or ""), max_length=220),
+        "message": sanitize_text(str(message or ""), max_length=500),
+    }
+    if hint:
+        item["hint"] = sanitize_text(str(hint), max_length=500)
+    return item
+
+
+def _diagnostic_summary(items: list[dict[str, Any]]) -> dict[str, int]:
+    summary: dict[str, int] = {}
+    for item in items:
+        status = str(item.get("status") or "unknown")
+        summary[status] = summary.get(status, 0) + 1
+    return summary
 
 
 def _repair_payload_text(value: Any) -> Any:
@@ -1782,6 +2080,8 @@ def _conversation(agent: Any) -> dict[str, Any]:
 
 def _tools(agent: Any) -> dict[str, Any]:
     registry = getattr(agent, "tools", None)
+    permission_policy = getattr(agent, "permission_policy", None)
+    safety_gate = SafetyGate()
     names = []
     entries = []
     direct_names = []
@@ -1812,10 +2112,38 @@ def _tools(agent: Any) -> dict[str, Any]:
                 entry = None
             toolset = str(getattr(entry, "toolset", "core") or "core")
             toolsets[toolset] = toolsets.get(toolset, 0) + 1
+            exposure = "direct"
+            if active_bridge and name not in direct_names and name not in BRIDGE_TOOL_NAMES:
+                exposure = "deferred"
+            elif name in BRIDGE_TOOL_NAMES:
+                exposure = "bridge"
+            risk = safety_gate.assess(name, {})
+            decision = None
+            if name == "tool_call":
+                risk_level = "dynamic"
+                risk_reason = "桥接调用会按实际目标工具重新判断风险。"
+                permission_action = "dynamic"
+                permission_reason = "取决于被调用的目标工具。"
+            else:
+                risk_level = risk.level
+                risk_reason = risk.reason
+                if permission_policy is not None:
+                    try:
+                        decision = permission_policy.decide(name, risk.level)
+                    except Exception:
+                        decision = None
+                permission_action = getattr(decision, "action", "unknown") if decision else "unknown"
+                permission_reason = str(getattr(decision, "reason", "") or "")
             item = {
                 "name": name,
                 "toolset": toolset,
                 "emoji": getattr(entry, "emoji", "") if entry else "",
+                "description": sanitize_text(str(getattr(entry, "description", "") or ""), max_length=260),
+                "risk": risk_level,
+                "risk_reason": sanitize_text(risk_reason, max_length=220),
+                "permission": permission_action,
+                "permission_reason": sanitize_text(permission_reason, max_length=220),
+                "exposure": exposure,
             }
             entries.append(item)
             if active_bridge and name not in direct_names and name not in BRIDGE_TOOL_NAMES:
@@ -1828,6 +2156,47 @@ def _tools(agent: Any) -> dict[str, Any]:
         "tool_search_active": active_bridge,
         "toolsets": toolsets,
         "items": entries[:80],
+        "diagnostics": _tools_diagnostics(entries, active_bridge),
+    }
+
+
+def _tools_diagnostics(entries: list[dict[str, Any]], active_bridge: bool) -> dict[str, Any]:
+    risk_counts: dict[str, int] = {}
+    permission_counts: dict[str, int] = {}
+    exposure_counts: dict[str, int] = {}
+    toolset_counts: dict[str, int] = {}
+    for entry in entries:
+        risk = str(entry.get("risk") or "unknown")
+        permission = str(entry.get("permission") or "unknown")
+        exposure = str(entry.get("exposure") or "direct")
+        toolset = str(entry.get("toolset") or "core")
+        risk_counts[risk] = risk_counts.get(risk, 0) + 1
+        permission_counts[permission] = permission_counts.get(permission, 0) + 1
+        exposure_counts[exposure] = exposure_counts.get(exposure, 0) + 1
+        toolset_counts[toolset] = toolset_counts.get(toolset, 0) + 1
+
+    recommendations = []
+    if not entries:
+        recommendations.append("当前没有注册工具，Sierra 只能进行纯对话。")
+    if permission_counts.get("ask", 0):
+        recommendations.append("需要确认的工具会在 Web 和 TUI 中弹出确认，适合写入、删除、终端和外部 MCP。")
+    if risk_counts.get("high", 0):
+        recommendations.append("高风险工具已纳入权限策略，建议保留确认流程。")
+    if active_bridge:
+        recommendations.append("工具检索桥接已启用，大量低频工具会按需暴露，能降低上下文占用。")
+    elif len(entries) > 60:
+        recommendations.append("工具数量较多，可以考虑启用 tool_search，把低频工具延迟暴露。")
+
+    return {
+        "summary": {
+            "total": len(entries),
+            "risk": risk_counts,
+            "permission": permission_counts,
+            "exposure": exposure_counts,
+            "toolsets": toolset_counts,
+            "tool_search_active": active_bridge,
+        },
+        "recommendations": recommendations,
     }
 
 
@@ -1880,13 +2249,18 @@ def _skills(agent: Any) -> dict[str, Any]:
     if not isinstance(summaries, list):
         summaries = []
     items = []
-    for summary in summaries[:24]:
+    for summary in summaries:
         if not isinstance(summary, dict):
             continue
         items.append({
             "name": summary.get("name", ""),
+            "description": summary.get("description", ""),
             "category": summary.get("category", ""),
+            "triggers": summary.get("triggers", []),
+            "platforms": summary.get("platforms", []),
+            "resource_counts": summary.get("resource_counts", {}),
             "readiness_status": summary.get("readiness_status", ""),
+            "readiness_reason": summary.get("readiness_reason", ""),
             "offered": summary.get("offered", False),
         })
     stats = _safe_call(agent, "skill_usage_stats", 8, default={})
@@ -1897,6 +2271,200 @@ def _skills(agent: Any) -> dict[str, Any]:
         "errors": list(errors or []),
         "stats": stats if isinstance(stats, dict) else {},
     }
+
+
+def _read_skill_detail(agent: Any, skill_name: str) -> dict[str, Any]:
+    loader = _require_skill_loader(agent)
+    skill = loader.get(_normalize_skill_name(skill_name))
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
+    try:
+        content = Path(skill.path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "skill": _skill_summary(agent, skill),
+        "content": content,
+        "path": skill.path,
+        "resources": skill.resources,
+    }
+
+
+def _create_skill_from_document(agent: Any, request: SkillCreateRequest) -> dict[str, Any]:
+    loader = _require_skill_loader(agent)
+    parsed = _parse_skill_document(request.content)
+    requested_name = str(request.name or "").strip()
+    if requested_name and requested_name != parsed["name"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill name must match frontmatter name.",
+        )
+    category = _normalize_skill_category(request.category or "custom")
+    if loader.get(parsed["name"]) is not None:
+        raise HTTPException(status_code=409, detail=f"Skill already exists: {parsed['name']}")
+    target = _skill_document_target(loader, category, parsed["name"], must_exist=False)
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"Skill already exists: {parsed['name']}")
+    _write_skill_document_atomic(target, request.content)
+    reload_result = _reload_skills_after_write(agent)
+    skill = loader.get(parsed["name"])
+    return {
+        "ok": True,
+        "name": parsed["name"],
+        "category": category,
+        "path": str(target),
+        "skill": _skill_summary(agent, skill) if skill is not None else None,
+        "reload": reload_result,
+        "text": f"Skill {parsed['name']} 已创建。",
+    }
+
+
+def _update_skill_document(agent: Any, skill_name: str, request: SkillContentRequest) -> dict[str, Any]:
+    loader = _require_skill_loader(agent)
+    normalized_name = _normalize_skill_name(skill_name)
+    skill = loader.get(normalized_name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
+    parsed = _parse_skill_document(request.content)
+    if parsed["name"] != skill.name:
+        raise HTTPException(
+            status_code=400,
+            detail="Changing a skill name from the editor is not supported. Create a new skill instead.",
+        )
+    target = Path(skill.path)
+    _assert_inside(Path(loader.skills_dir), target)
+    _write_skill_document_atomic(target, request.content)
+    reload_result = _reload_skills_after_write(agent)
+    updated = loader.get(normalized_name)
+    return {
+        "ok": True,
+        "name": normalized_name,
+        "path": str(target),
+        "skill": _skill_summary(agent, updated) if updated is not None else None,
+        "reload": reload_result,
+        "text": f"Skill {normalized_name} 已保存。",
+    }
+
+
+def _require_skill_loader(agent: Any) -> SkillLoader:
+    loader = getattr(agent, "skill_loader", None)
+    if not isinstance(loader, SkillLoader):
+        raise HTTPException(status_code=503, detail="Skill registry is not initialized")
+    return loader
+
+
+def _skill_summary(agent: Any, skill: Any) -> dict[str, Any]:
+    if skill is None:
+        return {}
+    skill_index = getattr(agent, "skill_index", None)
+    tools = getattr(agent, "tools", None)
+    tool_names = []
+    if tools is not None:
+        try:
+            tool_names = list(tools.names())
+        except Exception:
+            tool_names = []
+    if skill_index is not None:
+        try:
+            summaries = skill_index.summaries([skill], available_tools=tool_names, include_unavailable=True)
+            if summaries:
+                summary = dict(summaries[0])
+            else:
+                summary = skill.summary()
+        except Exception:
+            summary = skill.summary()
+    else:
+        summary = skill.summary()
+    summary["path"] = getattr(skill, "path", "")
+    summary["resources"] = getattr(skill, "resources", [])
+    return summary
+
+
+def _parse_skill_document(content: str) -> dict[str, str]:
+    text = str(content or "")
+    encoded = text.encode("utf-8")
+    if len(encoded) > MAX_SKILL_CONTENT_BYTES:
+        raise HTTPException(status_code=400, detail="SKILL.md is too large.")
+    try:
+        frontmatter, body = SkillLoader._parse_frontmatter(text)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid frontmatter: {exc}") from exc
+    if not frontmatter:
+        raise HTTPException(status_code=400, detail="SKILL.md must start with YAML frontmatter.")
+    name = str(frontmatter.get("name") or "").strip()
+    description = str(frontmatter.get("description") or "").strip()
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
+        raise HTTPException(
+            status_code=400,
+            detail="Skill name must use lowercase letters, numbers, and hyphens.",
+        )
+    if not description:
+        raise HTTPException(status_code=400, detail="Skill description is required.")
+    if not str(body or "").strip():
+        raise HTTPException(status_code=400, detail="SKILL.md body cannot be empty.")
+    return {"name": name, "description": description, "body": body}
+
+
+def _normalize_skill_name(name: str) -> str:
+    normalized = str(name or "").strip()
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", normalized):
+        raise HTTPException(status_code=400, detail="Invalid skill name.")
+    return normalized
+
+
+def _normalize_skill_category(category: str) -> str:
+    normalized = str(category or "custom").strip()
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", normalized):
+        raise HTTPException(status_code=400, detail="Invalid skill category.")
+    return normalized
+
+
+def _skill_document_target(
+    loader: SkillLoader,
+    category: str,
+    name: str,
+    *,
+    must_exist: bool,
+) -> Path:
+    root = Path(loader.skills_dir).resolve()
+    target = (root / category / name / "SKILL.md").resolve()
+    _assert_inside(root, target)
+    if must_exist and not target.exists():
+        raise HTTPException(status_code=404, detail=f"Skill not found: {name}")
+    return target
+
+
+def _assert_inside(root: Path, target: Path) -> None:
+    try:
+        target.relative_to(root.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Skill path escapes the skills directory.") from exc
+
+
+def _write_skill_document_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = content.encode("utf-8")
+    if len(encoded) > MAX_SKILL_CONTENT_BYTES:
+        raise HTTPException(status_code=400, detail="SKILL.md is too large.")
+    descriptor, temporary = tempfile.mkstemp(prefix=".sierra-skill-", dir=str(path.parent))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.remove(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _reload_skills_after_write(agent: Any) -> dict[str, Any]:
+    result = _safe_call(agent, "reload_skills", default={})
+    return result if isinstance(result, dict) else {}
 
 
 def _context(agent: Any) -> dict[str, Any]:
