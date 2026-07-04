@@ -246,6 +246,28 @@ class ContextCompactionTests(unittest.TestCase):
         self.assertEqual(agent.messages[1:], messages[-2:])
         self.assertIn("本地兜底压缩", agent.messages[0]["content"])
 
+    def test_no_savings_summary_uses_local_fallback(self):
+        messages = [
+            {"role": "user", "content": "old " + "a" * 1600},
+            {"role": "assistant", "content": "answer " + "b" * 1600},
+            {"role": "user", "content": "latest"},
+            {"role": "assistant", "content": "current"},
+        ]
+        agent = self.make_agent(
+            messages,
+            llm=SummaryLLM(content="too long " + "x" * 80000),
+        )
+        agent.compression_keep_tokens = 1
+
+        result = agent.compress_messages(force=True)
+
+        self.assertTrue(result["compressed"])
+        self.assertEqual(result["reason"], "summary_fallback_no_savings")
+        self.assertTrue(result["fallback"])
+        self.assertGreater(result["attempted_after_tokens"], result["before_tokens"])
+        self.assertLess(result["after_tokens"], result["before_tokens"])
+        self.assertEqual(agent.messages[1:], messages[-2:])
+
     def test_single_turn_is_not_compacted(self):
         llm = SummaryLLM()
         agent = self.make_agent([

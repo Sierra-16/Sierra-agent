@@ -99,6 +99,19 @@ class FakeAgent:
             }
         ][:limit]
 
+    def compress_messages(self, force=False):
+        self.messages = [
+            {"role": "system", "content": "[summary] compressed history"},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+        return {
+            "compressed": True,
+            "before_tokens": 1200,
+            "after_tokens": 320,
+            "force": force,
+        }
+
     def mcp_status(self):
         return {"servers": [{"name": "demo", "type": "stdio", "running": True}]}
 
@@ -518,6 +531,23 @@ class DashboardApiTest(unittest.TestCase):
         payload = response.json()
         self.assertTrue(payload["ok"])
         self.assertIn("remembered dashboard", payload["text"])
+
+    def test_command_endpoint_compress_accepts_slash_command(self):
+        app = create_dashboard_app(
+            FakeAgent(),
+            config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+            sierra_dir=".",
+            static_dir="missing-dist",
+        )
+        client = TestClient(app)
+
+        response = client.post("/api/command", json={"command": "/compress", "text": "/compress"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["type"], "compress")
+        self.assertIn("压缩完成", payload["text"])
 
     def test_conversation_endpoint_loads_messages(self):
         app = create_dashboard_app(

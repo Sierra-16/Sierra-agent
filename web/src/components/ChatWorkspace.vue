@@ -141,91 +141,91 @@
           <strong>{{ processStatusText }}</strong>
           <small>{{ processSideText }}</small>
         </div>
-      </div>
 
-      <TransitionGroup v-if="stackActivityEvents.length" name="activity-list" tag="div" class="status-stack">
-        <article
-          v-for="event in stackActivityEvents"
-          :key="event.id"
-          class="status-card"
-          :class="[event.type, event.status, riskClass(event)]"
+        <TransitionGroup
+          v-if="processFeedEvents.length"
+          name="process-feed"
+          tag="div"
+          class="process-feed"
         >
-          <div class="status-leading">
-            <span
-              v-if="event.type === 'thinking'"
-              class="thinking-sprite compact"
-              :class="event.status === 'active' ? 'active' : 'done'"
-            ></span>
-            <span v-else class="status-icon">
-              <component :is="iconFor(event)" :size="17" />
+          <article
+            v-for="event in processFeedEvents"
+            :key="event.id"
+            class="process-feed-item"
+            :class="[event.type, event.status, riskClass(event)]"
+          >
+            <span class="process-feed-icon">
+              <component :is="iconFor(event)" :size="15" />
             </span>
-          </div>
 
-          <div class="status-main">
-            <div class="status-title-line">
-              <strong>{{ event.label }}</strong>
-              <code v-if="event.toolName">{{ event.toolName }}</code>
-              <span v-if="event.risk" class="risk-pill" :class="riskClass(event)">
-                {{ event.risk }}
-              </span>
-            </div>
-            <p v-if="event.detail">{{ event.detail }}</p>
-            <p v-if="event.reason" class="approval-reason">{{ event.reason }}</p>
-
-            <div v-if="event.type === 'tool' && event.status === 'active'" class="tool-progress">
-              <span :style="{ width: `${event.progress ?? 64}%` }"></span>
-            </div>
-
-            <div
-              v-if="event.type === 'user-input' && event.status === 'active' && event.inputId"
-              class="input-request"
-            >
-              <div v-if="event.options?.length" class="input-options">
-                <button
-                  v-for="option in event.options"
-                  :key="option.value || option.label"
-                  type="button"
-                  @click="submitInputOption(event, option)"
-                >
-                  <strong>{{ option.label }}</strong>
-                  <small v-if="option.description">{{ option.description }}</small>
-                </button>
+            <div class="process-feed-main">
+              <div class="process-feed-title">
+                <strong>{{ event.label }}</strong>
+                <code v-if="event.toolName">{{ event.toolName }}</code>
+                <span v-if="event.risk" class="risk-pill" :class="riskClass(event)">
+                  {{ event.risk }}
+                </span>
               </div>
-              <form v-if="event.allowFreeText" class="input-inline" @submit.prevent="submitInputText(event)">
-                <input v-model="freeText[event.id]" type="text" placeholder="补充一句..." />
-                <button type="submit">发送</button>
-              </form>
+              <p v-if="event.reason || event.detail">{{ event.reason || event.detail }}</p>
+
+              <div v-if="event.type === 'tool' && event.status === 'active'" class="tool-progress process-tool-progress">
+                <span :style="{ width: `${event.progress ?? 64}%` }"></span>
+              </div>
+
+              <details v-if="event.arguments" class="argument-preview process-argument-preview">
+                <summary>参数</summary>
+                <pre>{{ event.arguments }}</pre>
+              </details>
             </div>
 
-            <details v-if="event.arguments" class="argument-preview">
-              <summary>参数</summary>
-              <pre>{{ event.arguments }}</pre>
-            </details>
-          </div>
+            <div class="process-feed-state">
+              <span v-if="event.status === 'active' || event.status === 'muted'" class="status-spinner" aria-hidden="true"></span>
+              <Check v-else-if="event.status === 'done'" :size="16" />
+              <AlertTriangle v-else-if="event.status === 'error'" :size="16" />
+            </div>
+          </article>
+        </TransitionGroup>
 
-          <div class="status-actions">
-            <template v-if="event.type === 'approval' && event.status === 'active' && event.approvalId">
-              <button class="approval-button once" type="button" @click="approve(event, 'once')">
-                本次允许
+        <div
+          v-if="showProcessActions"
+          class="process-actions"
+        >
+          <template v-if="activeActivity.type === 'approval' && activeActivity.status === 'active' && activeActivity.approvalId">
+            <button class="approval-button once" type="button" @click="approve(activeActivity, 'once')">
+              本次允许
+            </button>
+            <button class="approval-button session" type="button" @click="approve(activeActivity, 'session')">
+              本会话允许
+            </button>
+            <button class="approval-button deny" type="button" @click="approve(activeActivity, 'deny')">
+              拒绝
+            </button>
+          </template>
+          <div
+            v-else-if="activeActivity.type === 'user-input' && activeActivity.status === 'active' && activeActivity.inputId"
+            class="input-request process-input-request"
+          >
+            <div v-if="activeActivity.options?.length" class="input-options">
+              <button
+                v-for="option in activeActivity.options"
+                :key="option.value || option.label"
+                type="button"
+                @click="submitInputOption(activeActivity, option)"
+              >
+                <strong>{{ option.label }}</strong>
+                <small v-if="option.description">{{ option.description }}</small>
               </button>
-              <button class="approval-button session" type="button" @click="approve(event, 'session')">
-                本会话允许
-              </button>
-              <button class="approval-button deny" type="button" @click="approve(event, 'deny')">
-                拒绝
-              </button>
-            </template>
-            <template v-else-if="event.type === 'user-input' && event.status === 'active' && event.inputId">
-              <button class="approval-button deny" type="button" @click="cancelInput(event)">
-                跳过
-              </button>
-            </template>
-            <span v-else-if="event.status === 'active'" class="status-spinner" aria-hidden="true"></span>
-            <Check v-else-if="event.status === 'done'" :size="17" />
-            <AlertTriangle v-else-if="event.status === 'error'" :size="17" />
+            </div>
+            <form v-if="activeActivity.allowFreeText" class="input-inline" @submit.prevent="submitInputText(activeActivity)">
+              <input v-model="freeText[activeActivity.id]" type="text" placeholder="补充一句..." />
+              <button type="submit">发送</button>
+            </form>
+            <button class="approval-button deny" type="button" @click="cancelInput(activeActivity)">
+              跳过
+            </button>
           </div>
-        </article>
-      </TransitionGroup>
+        </div>
+      </div>
 
       <div v-if="draftAttachments.length" class="draft-attachments">
         <template v-for="attachment in draftAttachments" :key="attachment.id">
@@ -302,12 +302,18 @@
         </span>
       </div>
 
-      <div v-if="completionOpen" class="completion-popover">
+      <div
+        v-if="completionOpen"
+        class="completion-popover"
+        tabindex="-1"
+        @keydown="handleCompletionKeydown"
+        @wheel.stop
+      >
         <div class="completion-head">
           <span>{{ completionMode === "slash" ? "命令" : "上下文引用" }}</span>
           <small>{{ referenceLoading ? "搜索中..." : "↑↓ 选择 · Enter 插入 · Esc 关闭" }}</small>
         </div>
-        <div v-if="completionItems.length" class="completion-list">
+        <div v-if="completionItems.length" ref="completionListRef" class="completion-list" @wheel.stop>
           <button
             v-for="(item, index) in completionItems"
             :key="`${item.kind}:${item.value}:${index}`"
@@ -315,7 +321,8 @@
             class="completion-item"
             :class="{ active: index === selectedCompletionIndex }"
             @mousedown.prevent="applyCompletion(item)"
-            @mouseenter="selectedCompletionIndex = index"
+            @mouseenter="selectCompletion(index)"
+            @keydown.stop="handleCompletionKeydown"
           >
             <span class="completion-glyph">
               <component :is="completionIcon(item)" :size="16" />
@@ -342,7 +349,7 @@
           @click="updateCompletion"
           @input="onDraftInput"
           @keydown="handleKeydown"
-          @keyup="updateCompletion"
+          @keyup="handleKeyup"
         ></textarea>
         <button
           v-if="sending"
@@ -509,6 +516,7 @@ const previewOverlayRef = ref<HTMLElement | null>(null);
 const scrollEl = ref<HTMLElement | null>(null);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const completionListRef = ref<HTMLElement | null>(null);
 const completionOpen = ref(false);
 const completionMode = ref<CompletionMode>("slash");
 const completionItems = ref<CompletionItem[]>([]);
@@ -542,27 +550,68 @@ const recentUserImageReference = computed(() =>
 );
 
 const visibleActivityEvents = computed(() => props.activityEvents.slice(-5));
-const stackActivityEvents = computed(() =>
-  visibleActivityEvents.value
+const activityPriority = (event: ChatActivityEvent) => {
+  if (event.type === "approval") {
+    return 0;
+  }
+  if (event.type === "user-input") {
+    return 1;
+  }
+  if (event.type === "tool") {
+    return 2;
+  }
+  if (event.type === "command") {
+    return 3;
+  }
+  if (["context", "reference", "history", "memory"].includes(event.type)) {
+    return 4;
+  }
+  if (event.type === "thinking") {
+    return 5;
+  }
+  return 6;
+};
+const activeActivity = computed(() => {
+  const indexedEvents = props.activityEvents.map((event, index) => ({ event, index }));
+  const activeEvents = indexedEvents
+    .filter((item) => item.event.status === "active");
+  activeEvents.sort((left, right) => {
+    const priority = activityPriority(left.event) - activityPriority(right.event);
+    return priority || right.index - left.index;
+  });
+  if (activeEvents[0]) {
+    return activeEvents[0].event;
+  }
+  return [...indexedEvents]
+    .reverse()
+    .find((item) => item.event.status !== "muted" && item.event.type !== "thinking")?.event
+    || [...indexedEvents].reverse().find((item) => item.event.status !== "muted")?.event;
+});
+const processFeedEvents = computed(() =>
+  props.activityEvents
     .filter((event) => {
       if (event.type === "thinking") {
         return false;
       }
-      if (event.status === "active" || event.status === "error") {
-        return true;
-      }
-      if (event.type === "approval" || event.type === "user-input") {
-        return true;
-      }
-      return event.type === "tool" && event.status === "done";
+      return ["tool", "approval", "user-input", "command", "context", "reference", "history", "memory", "error"].includes(event.type);
     })
-    .slice(-2)
+    .slice(-6)
 );
-const activeActivity = computed(() => {
-  return visibleActivityEvents.value.find((event) => event.status === "active");
-});
 const showProcessPanel = computed(() => Boolean(activeActivity.value));
-const showActivity = computed(() => showProcessPanel.value || stackActivityEvents.value.length > 0);
+const showActivity = computed(() => showProcessPanel.value || processFeedEvents.value.length > 0);
+const showProcessActions = computed(() => {
+  const event = activeActivity.value;
+  if (!event || event.status !== "active") {
+    return false;
+  }
+  if (event.type === "approval") {
+    return Boolean(event.approvalId);
+  }
+  if (event.type === "user-input") {
+    return Boolean(event.inputId);
+  }
+  return false;
+});
 const activeActivityIcon = computed(() => activeActivity.value ? iconFor(activeActivity.value) : Sparkles);
 const processClasses = computed(() => {
   const event = activeActivity.value;
@@ -570,6 +619,9 @@ const processClasses = computed(() => {
 });
 const processKicker = computed(() => {
   const event = activeActivity.value;
+  if (event?.type === "command") {
+    return "命令";
+  }
   if (!event) {
     return "处理";
   }
@@ -589,6 +641,9 @@ const processKicker = computed(() => {
 });
 const processTitle = computed(() => {
   const event = activeActivity.value;
+  if (event?.type === "command") {
+    return event.status === "done" ? "命令完成" : "执行命令";
+  }
   if (!event) {
     return "处理中";
   }
@@ -611,7 +666,10 @@ const processTitle = computed(() => {
     return "检索会话";
   }
   if (event.type === "context" || event.type === "reference") {
-    return "整理上下文";
+    if (event.status === "done") {
+      return event.label || "上下文已整理";
+    }
+    return event.label || "整理上下文";
   }
   if (event.type === "thinking") {
     if (recentUserImageReference.value && event.status === "active") {
@@ -629,6 +687,10 @@ const processDetail = computed(() => {
   if (event.type === "thinking") {
     return recentUserImageReference.value ? "正在读取你发来的图片。" : "";
   }
+  if ((event.type === "context" || event.type === "reference") && event.status === "done") {
+    const detail = event.reason || event.detail || "";
+    return detail.includes("正在") ? "上下文整理已完成。" : detail;
+  }
   return event.reason || event.detail || "";
 });
 const processStatusText = computed(() => {
@@ -643,6 +705,9 @@ const processStatusText = computed(() => {
 });
 const processSideText = computed(() => {
   const event = activeActivity.value;
+  if (event?.type === "command") {
+    return "命令";
+  }
   if (!event) {
     return "处理中";
   }
@@ -947,24 +1012,95 @@ function applyCompletion(item: CompletionItem) {
   });
 }
 
+function commandNeedsArgument(item: CompletionItem) {
+  return [
+    "/session-search",
+    "/session-load",
+    "/memory-search",
+    "/memory-forget",
+    "/cron-add"
+  ].includes(item.label);
+}
+
+function shouldSubmitExactSlashCommand(item: CompletionItem | undefined, event: KeyboardEvent) {
+  if (!item || event.key !== "Enter" || event.shiftKey || completionMode.value !== "slash") {
+    return false;
+  }
+  return draft.value.trim() === item.label && !commandNeedsArgument(item);
+}
+
+function selectCompletion(index: number) {
+  selectedCompletionIndex.value = Math.max(0, Math.min(index, Math.max(completionItems.value.length - 1, 0)));
+  scrollSelectedCompletionIntoView();
+}
+
+function moveCompletionSelection(direction: -1 | 1) {
+  const total = completionItems.value.length;
+  if (!total) {
+    return;
+  }
+  selectedCompletionIndex.value = (selectedCompletionIndex.value + direction + total) % total;
+  scrollSelectedCompletionIntoView();
+}
+
+function scrollSelectedCompletionIntoView() {
+  nextTick(() => {
+    const list = completionListRef.value;
+    if (!list || !completionOpen.value) {
+      return;
+    }
+    const active = list.querySelector<HTMLElement>(".completion-item.active");
+    if (!active) {
+      return;
+    }
+    active.scrollIntoView({ block: "nearest" });
+    animateCompletionSelection(active);
+  });
+}
+
+function animateCompletionSelection(active: HTMLElement) {
+  if (prefersReducedMotion()) {
+    return;
+  }
+  runScopedAnimation(() => {
+    gsap.fromTo(
+      active,
+      { x: -4, scale: 0.992 },
+      { x: 0, scale: 1, duration: 0.16, ease: "power2.out", overwrite: "auto" }
+    );
+  });
+}
+
+function handleCompletionKeydown(event: KeyboardEvent) {
+  if (!completionOpen.value) {
+    return;
+  }
+  handleKeydown(event);
+}
+
 function handleKeydown(event: KeyboardEvent) {
   if (completionOpen.value) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      selectedCompletionIndex.value = (selectedCompletionIndex.value + 1) % Math.max(completionItems.value.length, 1);
+      moveCompletionSelection(1);
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      selectedCompletionIndex.value =
-        (selectedCompletionIndex.value - 1 + Math.max(completionItems.value.length, 1)) %
-        Math.max(completionItems.value.length, 1);
+      moveCompletionSelection(-1);
       return;
     }
     if (event.key === "Enter" || event.key === "Tab") {
-      if (completionItems.value[selectedCompletionIndex.value]) {
+      const selected = completionItems.value[selectedCompletionIndex.value];
+      if (shouldSubmitExactSlashCommand(selected, event)) {
         event.preventDefault();
-        applyCompletion(completionItems.value[selectedCompletionIndex.value]);
+        completionOpen.value = false;
+        submitDraft();
+        return;
+      }
+      if (selected) {
+        event.preventDefault();
+        applyCompletion(selected);
         return;
       }
     }
@@ -985,6 +1121,16 @@ function handleKeydown(event: KeyboardEvent) {
     event.preventDefault();
     browseHistory(event.key === "ArrowUp" ? -1 : 1);
   }
+}
+
+function handleKeyup(event: KeyboardEvent) {
+  if (
+    completionOpen.value
+    && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)
+  ) {
+    return;
+  }
+  updateCompletion();
 }
 
 function browseHistory(direction: -1 | 1) {
@@ -1139,6 +1285,9 @@ function iconFor(event: ChatActivityEvent) {
   if (event.status === "error") {
     return AlertTriangle;
   }
+  if (event.type === "command") {
+    return ScrollText;
+  }
   if (event.type === "tool") {
     return Wrench;
   }
@@ -1199,8 +1348,9 @@ function setupMotion() {
         ".chat-statusbar",
         ".composer-dock",
         ".message-row",
-        ".status-card",
         ".process-panel",
+        ".process-feed-item",
+        ".process-actions",
         ".message-attachment"
       ],
       { willChange: "transform, opacity" }
@@ -1367,29 +1517,59 @@ function animateLatestMessage() {
 function animateActivityPanel() {
   nextTick(() => {
     const panel = workspaceRef.value?.querySelector<HTMLElement>(".process-panel");
-    const cards = workspaceRef.value?.querySelectorAll<HTMLElement>(".status-card");
+    const feedItems = workspaceRef.value?.querySelectorAll<HTMLElement>(".process-feed-item");
+    const actions = workspaceRef.value?.querySelector<HTMLElement>(".process-actions");
     runScopedAnimation(() => {
       if (panel) {
-        gsap.fromTo(
+        const firstRun = panel.dataset.motionReady !== "true";
+        panel.dataset.motionReady = "true";
+        const timeline = gsap.timeline({ defaults: { ease: "power3.out", overwrite: "auto" } });
+        timeline.fromTo(
           panel,
-          { autoAlpha: 0, y: 12, scale: 0.99 },
-          { autoAlpha: 1, y: 0, scale: 1, duration: 0.26, ease: "power3.out", overwrite: "auto" }
+          firstRun
+            ? { autoAlpha: 0, y: 14, scale: 0.988 }
+            : { y: 4, scale: 0.998 },
+          firstRun
+            ? { autoAlpha: 1, y: 0, scale: 1, duration: 0.28 }
+            : { y: 0, scale: 1, duration: 0.18 }
+        );
+        timeline.fromTo(
+          panel.querySelectorAll(".process-phase.active"),
+          { y: 2, scale: 0.94 },
+          { y: 0, scale: 1, duration: 0.22, stagger: 0.025 },
+          firstRun ? "<0.08" : "<"
         );
       }
-      if (cards?.length) {
-        gsap.from(cards[cards.length - 1], {
-          autoAlpha: 0,
-          y: 10,
-          scale: 0.98,
-          duration: 0.22,
-          ease: "power2.out",
-          overwrite: "auto"
-        });
+      if (feedItems?.length) {
+        gsap.fromTo(
+          feedItems[feedItems.length - 1],
+          { autoAlpha: 0, y: 9, scale: 0.985 },
+          {
+            autoAlpha: 1,
+            y: 0,
+            scale: 1,
+            duration: 0.24,
+            ease: "power2.out",
+            overwrite: "auto"
+          }
+        );
+      }
+      if (actions) {
+        gsap.fromTo(
+          actions,
+          { autoAlpha: 0, y: 6 },
+          {
+            autoAlpha: 1,
+            y: 0,
+            duration: 0.18,
+            ease: "power2.out",
+            overwrite: "auto"
+          }
+        );
       }
     });
   });
 }
-
 function animateUploadState() {
   nextTick(() => {
     const state = workspaceRef.value?.querySelector<HTMLElement>(".upload-state");
@@ -1463,6 +1643,16 @@ watch(
 watch(
   () => props.activityEvents.map((event) => `${event.id}:${event.status}:${event.detail}`).join("|"),
   animateActivityPanel,
+  { flush: "post" }
+);
+
+watch(
+  () => [completionOpen.value, selectedCompletionIndex.value, completionItems.value.length],
+  () => {
+    if (completionOpen.value) {
+      scrollSelectedCompletionIntoView();
+    }
+  },
   { flush: "post" }
 );
 

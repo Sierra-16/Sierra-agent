@@ -97,6 +97,8 @@ const appShellRef = ref<HTMLElement | null>(null);
 let timer: number | undefined;
 let activeChatAbortController: AbortController | null = null;
 let shellMotion: ReturnType<typeof gsap.context> | undefined;
+let toolRunCounter = 0;
+const activeToolRuns = new Map<string, string>();
 
 const mainNav: NavItem[] = [
   { id: "chat", label: "会话", subtitle: "Chat", icon: MessageCircle }
@@ -119,11 +121,51 @@ function newId() {
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function resetActivityRunTracking() {
+  toolRunCounter = 0;
+  activeToolRuns.clear();
+}
+
+function beginToolRun(name: string) {
+  toolRunCounter += 1;
+  const id = `tool:${name}:${toolRunCounter}`;
+  activeToolRuns.set(name, id);
+  return id;
+}
+
+function resolveToolRun(name: string) {
+  const activeId = activeToolRuns.get(name);
+  if (activeId) {
+    activeToolRuns.delete(name);
+    return activeId;
+  }
+  const latestActive = [...activityEvents.value]
+    .reverse()
+    .find((event) => event.type === "tool" && event.toolName === name && event.status === "active");
+  if (latestActive) {
+    return latestActive.id;
+  }
+  return beginToolRun(name);
+}
+
 function appendSystem(text: string) {
   const clean = String(text || "").trim();
   if (clean) {
     chatMessages.value.push({ id: newId(), role: "system", text: clean });
   }
+}
+
+function applyUsageSnapshot(usage: any) {
+  if (!usage || !payload.value) {
+    return;
+  }
+  payload.value = {
+    ...payload.value,
+    usage: {
+      ...payload.value.usage,
+      ...usage
+    }
+  };
 }
 
 function mapMessages(messages: any[]): ChatMessage[] {
@@ -207,6 +249,7 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
     chatMessages.value.push({ id: newId(), role: "user", text });
   }
   sending.value = true;
+  resetActivityRunTracking();
   activityEvents.value = [
     {
       id: "thinking",
@@ -341,6 +384,19 @@ async function runCommandPayload(
   if (options.appendUser) {
     chatMessages.value.push({ id: newId(), role: "user", text: body.text || body.command || "/help" });
   }
+  const commandActivityId = `command:${String(body.command || "command").replace(/[^\w-]+/g, "_")}`;
+  const showCommandActivity = options.appendUser || options.appendResult;
+  if (showCommandActivity) {
+    activityEvents.value = [
+      {
+        id: commandActivityId,
+        type: "command",
+        label: "执行命令",
+        detail: String(body.text || body.command || "/help"),
+        status: "active"
+      }
+    ];
+  }
   sending.value = true;
   try {
     const response = await fetch("/api/command", {
@@ -353,25 +409,61 @@ async function runCommandPayload(
       throw new Error(data.error || `Command API ${response.status}`);
     }
     if (data.requires_confirmation) {
+      if (showCommandActivity) {
+        markActivity(commandActivityId, {
+          label: "等待确认",
+          detail: String(data.text || "确认执行这个命令？"),
+          status: "active"
+        });
+      }
       const confirmed = window.confirm(String(data.text || "确认执行这个操作？"));
       if (confirmed) {
         sending.value = false;
         await runCommandPayload({ ...body, confirmed: true }, { appendUser: false, appendResult: options.appendResult, confirmed: true });
       } else if (options.appendResult) {
         appendSystem("已取消操作。");
+        markActivity(commandActivityId, {
+          label: "命令已取消",
+          detail: String(body.text || body.command || "/help"),
+          status: "error"
+        });
       }
       return;
     }
     await handleCommandResult(data, options);
+    if (showCommandActivity) {
+      markActivity(commandActivityId, {
+        label: data.ok === false ? "命令未完成" : "命令完成",
+        detail: String(data.type || body.command || "command"),
+        status: data.ok === false ? "error" : "done"
+      });
+    }
   } catch (err) {
     appendSystem(`命令执行失败: ${err instanceof Error ? err.message : String(err)}`);
+    if (showCommandActivity) {
+      markActivity(commandActivityId, {
+        label: "命令失败",
+        detail: err instanceof Error ? err.message : String(err),
+        status: "error"
+      });
+    }
   } finally {
     sending.value = false;
     await loadDashboard({ bootstrap: false });
+    if (showCommandActivity) {
+      window.setTimeout(() => {
+        if (!sending.value) {
+          activityEvents.value = [];
+        }
+      }, 1400);
+    }
   }
 }
 
 async function handleCommandResult(data: any, options: { appendResult: boolean }) {
+  if (data.usage) {
+    applyUsageSnapshot(data.usage);
+  }
   if (Array.isArray(data.messages)) {
     chatMessages.value = mapMessages(data.messages);
   }
@@ -416,6 +508,7 @@ function processChatStreamLine(
     if (assistant) {
       assistant.text += String(event.text || "");
     }
+    closeActiveContextActivity();
     markActivity("thinking", { status: "done", detail: "" });
     return;
   }
@@ -472,10 +565,31 @@ function markActivity(id: string, patch: Partial<ChatActivityEvent>) {
   }
 }
 
+function normalizeCompletedActivity(event: ChatActivityEvent) {
+  if (event.type === "context" && event.id === "context") {
+    event.label = "上下文已整理";
+    if (!event.detail || event.detail.includes("正在")) {
+      event.detail = "历史轮次已摘要化或已跳过。";
+    }
+  }
+}
+
+function closeActiveContextActivity() {
+  const contextEvent = activityEvents.value.find(
+    (event) => event.id === "context" && event.type === "context" && event.status === "active"
+  );
+  if (!contextEvent) {
+    return;
+  }
+  contextEvent.status = "done";
+  normalizeCompletedActivity(contextEvent);
+}
+
 function markAllActivityDone() {
   for (const event of activityEvents.value) {
     if (event.status === "active" && event.type !== "approval" && event.type !== "user-input") {
       event.status = "done";
+      normalizeCompletedActivity(event);
     }
   }
 }
@@ -494,7 +608,7 @@ function handleActivityEvent(event: any) {
   if (type === "tool_start" || type === "tool") {
     const name = String(event.name || "tool");
     const copy = toolEventCopy(name);
-    upsertActivity(`tool:${name}`, {
+    upsertActivity(beginToolRun(name), {
       type: "tool",
       label: copy.activeLabel,
       detail: copy.activeDetail,
@@ -509,7 +623,7 @@ function handleActivityEvent(event: any) {
     const name = String(event.name || "tool");
     const copy = toolEventCopy(name);
     const failed = event.success === false;
-    upsertActivity(`tool:${name}`, {
+    upsertActivity(resolveToolRun(name), {
       type: "tool",
       label: failed ? copy.errorLabel : copy.doneLabel,
       detail: event.text ? String(event.text) : copy.doneDetail,
@@ -623,6 +737,26 @@ function handleActivityEvent(event: any) {
       label: "上下文已整理",
       detail: "历史轮次已摘要化。",
       status: "done"
+    });
+    return;
+  }
+
+  if (type === "context_compaction_skipped") {
+    upsertActivity("context", {
+      type: "context",
+      label: "上下文无需压缩",
+      detail: "当前没有可安全压缩的完整历史轮次。",
+      status: "done"
+    });
+    return;
+  }
+
+  if (type === "context_compaction_failed") {
+    upsertActivity("context", {
+      type: "context",
+      label: "上下文整理失败",
+      detail: "摘要没有完成，Sierra 已继续使用当前上下文。",
+      status: "error"
     });
     return;
   }

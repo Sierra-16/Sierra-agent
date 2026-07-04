@@ -597,14 +597,18 @@ def _execute_dashboard_command(app: FastAPI, request: CommandRequest) -> dict[st
         result = _safe_call(agent, "compress_messages", default={}, force=True)
         if not isinstance(result, dict):
             result = {}
-        if result.get("compressed"):
-            text = (
-                f"压缩完成: {before_messages} → {len(getattr(agent, 'messages', []) or [])} 条，"
-                f"约 {result.get('before_tokens', '?')} → {result.get('after_tokens', '?')} tokens"
-            )
-        else:
-            text = result.get("reason") or "当前没有可安全压缩的完整历史轮次。"
-        return _ok("compress", text, usage=_usage(_usage_snapshot(agent)))
+        _safe_call(agent, "refresh_context_estimate", default=None)
+        text = _format_compression_result(
+            result,
+            before_messages=before_messages,
+            after_messages=len(getattr(agent, "messages", []) or []),
+        )
+        return _ok(
+            "compress",
+            text,
+            usage=_usage(_usage_snapshot(agent)),
+            compression=result,
+        )
 
     if command == "memory":
         status = _safe_call(agent, "memory_status", default={})
@@ -793,6 +797,51 @@ def _normalize_command_request(request: CommandRequest) -> tuple[str, str]:
         command = request.command.strip().lstrip("/").split(maxsplit=1)[0]
     command = command.replace("-", "_")
     return command.lower(), argument.strip()
+
+
+def _format_compression_result(
+    result: dict[str, Any],
+    *,
+    before_messages: int,
+    after_messages: int,
+) -> str:
+    before_tokens = result.get("before_tokens", "?")
+    after_tokens = result.get("after_tokens", "?")
+    if result.get("compressed"):
+        reason = str(result.get("reason") or "compressed")
+        prefix = "压缩完成"
+        if reason in {"summary_fallback", "summary_fallback_no_savings"} or result.get("fallback"):
+            prefix = "压缩完成（已使用本地兜底摘要）"
+        if reason == "pruned_tool_results":
+            prefix = "压缩完成（已清理旧工具结果）"
+        summarized = result.get("summarized_messages")
+        extra = f"，摘要覆盖 {summarized} 条旧消息" if summarized else ""
+        return (
+            f"{prefix}: {before_messages} -> {after_messages} 条，"
+            f"约 {before_tokens} -> {after_tokens} tokens{extra}"
+        )
+
+    reason = str(result.get("reason") or "")
+    if reason == "no_token_savings":
+        attempted = result.get("attempted_after_tokens")
+        attempted_text = f"（摘要估算约 {attempted} tokens）" if attempted else ""
+        return (
+            "这次没有替换历史：生成的摘要没有比原会话更省上下文"
+            f"{attempted_text}，所以右上角占用不会变化。"
+        )
+    if reason == "insufficient_history":
+        return "当前还没有足够多的完整旧对话轮次可以压缩。"
+    if reason == "empty_transcript":
+        return "没有可用于摘要的旧对话内容。"
+    if reason == "summary_failure_cooldown":
+        remaining = result.get("cooldown_remaining_seconds")
+        return f"上次摘要失败后正在冷却，稍后再试。剩余约 {remaining} 秒。" if remaining else "上次摘要失败后正在冷却，稍后再试。"
+    if reason == "ineffective_compression_backoff":
+        return "最近几次压缩收益都很低，Sierra 暂时跳过自动压缩。"
+    if reason == "summary_failed":
+        detail = result.get("fallback_error") or result.get("error") or ""
+        return f"压缩失败：{detail}" if detail else "压缩失败，当前上下文保持不变。"
+    return "当前没有可安全压缩的完整历史轮次。"
 
 
 def _ok(event_type: str, text: str, **extra: Any) -> dict[str, Any]:

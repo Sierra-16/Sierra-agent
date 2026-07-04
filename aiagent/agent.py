@@ -1645,6 +1645,37 @@ class Agent:
             compacted_messages, stripped_media = strip_historical_media(compacted_messages)
             after_tokens = estimate_tokens(compacted_messages)
             if after_tokens >= before_tokens:
+                try:
+                    fallback_summary = build_fallback_summary(old_messages)
+                    fallback_message = build_summary_message(fallback_summary)
+                    fallback_messages = [*head_messages, fallback_message, *recent_messages]
+                    fallback_messages, fallback_stripped_media = strip_historical_media(fallback_messages)
+                    fallback_tokens = estimate_tokens(fallback_messages)
+                    if fallback_tokens < before_tokens:
+                        self.messages = fallback_messages
+                        self.refresh_context_estimate()
+                        result = {
+                            "compressed": True,
+                            "reason": "summary_fallback_no_savings",
+                            "fallback": True,
+                            "before_messages": before_messages,
+                            "after_messages": len(self.messages),
+                            "summarized_messages": len(old_messages),
+                            "protected_head_messages": len(head_messages),
+                            "kept_messages": len(recent_messages),
+                            "before_tokens": before_tokens,
+                            "after_tokens": fallback_tokens,
+                            "attempted_after_tokens": after_tokens,
+                            "pruned_tool_results": pruned_tool_results,
+                            "stripped_media_messages": fallback_stripped_media,
+                        }
+                        self._record_compression_result(result)
+                        return result
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "Fallback context compaction after no-savings summary failed: %s",
+                        fallback_exc,
+                    )
                 self._ineffective_compression_count = (
                     getattr(self, "_ineffective_compression_count", 0) + 1
                 )
@@ -1656,6 +1687,7 @@ class Agent:
                     "after_messages": before_messages,
                     "before_tokens": before_tokens,
                     "after_tokens": before_tokens,
+                    "attempted_after_tokens": after_tokens,
                 }
 
             self.messages = compacted_messages
