@@ -87,12 +87,14 @@ class TaskManager:
             ),
             parameters=UPDATE_PLAN_SCHEMA,
             handler=self.update_plan,
+            toolset="planning",
         )
         registry.register(
             name="get_plan",
             description="读取当前任务计划、步骤进度和中断时结果不确定的工具调用。",
             parameters={"type": "object", "properties": {}},
             handler=self.get_plan_tool,
+            toolset="planning",
         )
         registry.register(
             name="resolve_task_execution",
@@ -103,6 +105,7 @@ class TaskManager:
             ),
             parameters=RESOLVE_EXECUTION_SCHEMA,
             handler=self.resolve_execution,
+            toolset="planning",
         )
 
     def bind_conversation(self, conversation_id: str | None) -> None:

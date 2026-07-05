@@ -61,6 +61,19 @@
     "deny": []
   },
   "tools": {
+    "toolsets": {
+      "enabled": ["default"],
+      "disabled": [],
+      "additional_tools": [],
+      "disabled_tools": [],
+      "custom": {
+        "research": {
+          "description": "Web and document reading without local writes.",
+          "includes": ["core", "web", "file_readonly", "vision"],
+          "tools": []
+        }
+      }
+    },
     "tool_search": {
       "enabled": "auto",
       "threshold_pct": 10,

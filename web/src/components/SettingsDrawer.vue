@@ -1076,12 +1076,16 @@ const selectedModelDiagnostic = computed(() => modelDiagnostic(modelForm.value.k
 const modelReadyCount = computed(() => modelDiagnosticsItems.value.filter((item: any) => ["active", "ready"].includes(String(item?.status))).length);
 const modelNeedsSetupCount = computed(() => modelDiagnosticsItems.value.filter((item: any) => ["needs_setup", "invalid"].includes(String(item?.status))).length);
 const modelVisionCount = computed(() => Number(modelDiagnostics.value?.summary?.vision_models || 0));
-const visionCapability = computed(() => {
-  const capabilities = props.payload?.auxiliary?.capabilities;
-  if (!Array.isArray(capabilities)) {
-    return null;
+const capabilityItems = computed(() => {
+  const unified = props.payload?.capabilities?.items;
+  if (Array.isArray(unified)) {
+    return unified;
   }
-  return capabilities.find((item: any) => String(item?.name || "").toLowerCase() === "vision") || null;
+  const legacy = props.payload?.auxiliary?.capabilities;
+  return Array.isArray(legacy) ? legacy : [];
+});
+const visionCapability = computed(() => {
+  return capabilityItems.value.find((item: any) => String(item?.name || "").toLowerCase() === "vision") || null;
 });
 const auxiliaryVisionEnabled = computed(() => Boolean(visionCapability.value?.enabled));
 const effectiveVisionEnabled = computed(() => Boolean(modelForm.value.supports_vision || auxiliaryVisionEnabled.value));

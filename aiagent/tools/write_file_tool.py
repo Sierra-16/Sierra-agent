@@ -51,4 +51,5 @@ registry.register(
     description="Write text to a file. Relative paths resolve under the user workspace.",
     parameters=WRITE_FILE_SCHEMA,
     handler=write_file,
+    toolset="file",
 )

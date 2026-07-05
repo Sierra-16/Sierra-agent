@@ -206,5 +206,6 @@ registry.register(
     name="web_search",
     description="搜索互联网，返回网页标题、URL 和摘要。适用于查找最新信息、教程、文档等",
     parameters=WEB_SEARCH_SCHEMA,
-    handler=web_search
+    handler=web_search,
+    toolset="web",
 )

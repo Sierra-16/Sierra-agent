@@ -184,6 +184,7 @@ class MCPManager:
                     description=f"[MCP:{server.name}] {description}",
                     parameters=schema,
                     handler=self._make_handler(exposed_name),
+                    toolset=f"mcp:{server.name}",
                 )
                 self.tool_map[exposed_name] = (server.name, original_name)
                 self._registered_tool_names.add(exposed_name)

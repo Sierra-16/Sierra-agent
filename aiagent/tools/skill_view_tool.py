@@ -278,6 +278,7 @@ registry.register(
         },
     },
     handler=skills_list,
+    toolset="skills",
 )
 
 registry.register(
@@ -305,6 +306,7 @@ registry.register(
         "required": ["name"],
     },
     handler=skill_view,
+    toolset="skills",
 )
 
 registry.register(
@@ -327,6 +329,7 @@ registry.register(
         "required": ["name", "file_path"],
     },
     handler=skill_render_template,
+    toolset="skills",
 )
 
 registry.register(
@@ -355,4 +358,5 @@ registry.register(
         "required": ["name", "file_path"],
     },
     handler=skill_run_script,
+    toolset="skills",
 )

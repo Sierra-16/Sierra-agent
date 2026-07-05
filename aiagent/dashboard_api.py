@@ -27,6 +27,7 @@ from .config_validation import (
     validate_model_config,
 )
 from .auxiliary_config import auxiliary_status
+from .capabilities import CapabilityRegistry
 from .gateway import GatewayRuntime, sanitize_gateway_event
 from .safety import SafetyGate, sanitize_text
 from .skills.loader import SkillLoader
@@ -94,6 +95,14 @@ class MCPServerConfigRequest(BaseModel):
     enabled: bool = True
 
 
+class ToolsetConfigRequest(BaseModel):
+    enabled: list[str] = Field(default_factory=lambda: ["default"])
+    disabled: list[str] = Field(default_factory=list)
+    additional_tools: list[str] = Field(default_factory=list)
+    disabled_tools: list[str] = Field(default_factory=list)
+    custom: dict[str, Any] = Field(default_factory=dict)
+
+
 class SkillCreateRequest(BaseModel):
     name: str = Field(default="", max_length=120)
     category: str = Field(default="custom", max_length=120)
@@ -154,6 +163,13 @@ def create_dashboard_app(
             sierra_dir=app.state.sierra_dir,
         )
 
+    @app.get("/api/capabilities")
+    def capabilities() -> dict[str, Any]:
+        return {
+            "ok": True,
+            **_capabilities(app.state.gateway.agent),
+        }
+
     @app.get("/api/config/models")
     def config_models() -> dict[str, Any]:
         config = app.state.config if isinstance(app.state.config, dict) else {}
@@ -209,6 +225,19 @@ def create_dashboard_app(
     def delete_mcp_config(server_name: str) -> dict[str, Any]:
         with app.state.chat_lock:
             return _delete_mcp_config(app, server_name)
+
+    @app.get("/api/toolsets")
+    def toolsets() -> dict[str, Any]:
+        return _toolsets_payload(app)
+
+    @app.get("/api/config/toolsets")
+    def config_toolsets() -> dict[str, Any]:
+        return _toolsets_payload(app)
+
+    @app.post("/api/config/toolsets")
+    def save_toolsets_config(request: ToolsetConfigRequest) -> dict[str, Any]:
+        with app.state.chat_lock:
+            return _save_toolsets_config(app, request)
 
     @app.get("/api/tools/diagnostics")
     def tools_diagnostics() -> dict[str, Any]:
@@ -1189,6 +1218,100 @@ def _delete_model_config(app: FastAPI, model_key: str) -> dict[str, Any]:
     }
 
 
+def _toolsets_payload(app: FastAPI) -> dict[str, Any]:
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    tools_config = config.get("tools") if isinstance(config.get("tools"), dict) else {}
+    current = tools_config.get("toolsets") if isinstance(tools_config.get("toolsets"), dict) else {}
+    registry = getattr(app.state.gateway.agent, "tools", None)
+    try:
+        status = registry.toolset_status() if registry is not None else {}
+    except Exception:
+        status = {}
+    return {
+        "ok": True,
+        "config": current,
+        "status": status,
+    }
+
+
+def _save_toolsets_config(app: FastAPI, request: ToolsetConfigRequest) -> dict[str, Any]:
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    tools_config = config.setdefault("tools", {})
+    if not isinstance(tools_config, dict):
+        config["tools"] = {}
+        tools_config = config["tools"]
+
+    tools_config["toolsets"] = {
+        "enabled": _string_list(request.enabled) or ["default"],
+        "disabled": _string_list(request.disabled),
+        "additional_tools": _string_list(request.additional_tools),
+        "disabled_tools": _string_list(request.disabled_tools),
+        "custom": _safe_custom_toolsets(request.custom),
+    }
+    _write_dashboard_config(app)
+
+    rebuilt = _rebuild_agent(app, str(config.get("active_model") or ""))
+    if not rebuilt.get("ok"):
+        _apply_toolset_runtime_config(app)
+
+    payload = _toolsets_payload(app)
+    return {
+        "ok": True,
+        "type": "toolsets_saved",
+        "text": "工具集配置已保存并应用。",
+        "config": payload.get("config", {}),
+        "status": payload.get("status", {}),
+        "reloaded": bool(rebuilt.get("ok")),
+    }
+
+
+def _apply_toolset_runtime_config(app: FastAPI) -> None:
+    config = app.state.config if isinstance(app.state.config, dict) else {}
+    tools_config = config.get("tools") if isinstance(config.get("tools"), dict) else {}
+    agent = app.state.gateway.agent
+    registry = getattr(agent, "tools", None)
+    configure_tools = getattr(registry, "configure_tools", None)
+    if callable(configure_tools):
+        configure_tools(tools_config, context_window=_active_context_window(config))
+    _safe_call(agent, "refresh_capabilities", default=None)
+    build_prompt = getattr(agent, "_build_system_prompt", None)
+    if callable(build_prompt):
+        try:
+            agent.system_prompt = build_prompt()
+        except Exception:
+            pass
+
+
+def _safe_custom_toolsets(raw: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    custom: dict[str, dict[str, Any]] = {}
+    for name, value in raw.items():
+        safe_name = _safe_config_key(str(name))
+        if not safe_name:
+            continue
+        if isinstance(value, dict):
+            custom[safe_name] = {
+                "description": sanitize_text(str(value.get("description") or ""), max_length=500),
+                "includes": _string_list(value.get("includes")),
+                "tools": _string_list(value.get("tools")),
+            }
+        elif isinstance(value, (list, tuple, set, str)):
+            custom[safe_name] = {
+                "description": f"Custom toolset: {safe_name}",
+                "includes": [],
+                "tools": _string_list(value),
+            }
+    return custom
+
+
+def _active_context_window(config: dict[str, Any]) -> int:
+    active = str(config.get("active_model") or "")
+    models = config.get("models") if isinstance(config.get("models"), dict) else {}
+    model_config = models.get(active) if isinstance(models.get(active), dict) else {}
+    return _int(model_config.get("context_window"), 256000)
+
+
 def _save_mcp_config(app: FastAPI, request: MCPServerConfigRequest) -> dict[str, Any]:
     config = app.state.config if isinstance(app.state.config, dict) else {}
     servers = config.setdefault("mcpServers", {})
@@ -2058,6 +2181,7 @@ def build_dashboard_payload(
         "cron": _cron(agent),
         "skills": _skills(agent),
         "auxiliary": _auxiliary(agent),
+        "capabilities": _capabilities(agent),
         "context": _context(agent),
         "audit": _audit(agent),
         "sierra_frame": _sierra_frame(root_dir),
@@ -2135,6 +2259,8 @@ def _tools(agent: Any) -> dict[str, Any]:
     entries = []
     direct_names = []
     deferred_names = []
+    available_names = []
+    unavailable_names = []
     toolsets: dict[str, int] = {}
     active_bridge = False
 
@@ -2143,6 +2269,15 @@ def _tools(agent: Any) -> dict[str, Any]:
             names = list(registry.names())
         except Exception:
             names = []
+        for name in names:
+            try:
+                available = bool(registry.is_tool_available(name))
+            except Exception:
+                available = True
+            if available:
+                available_names.append(name)
+            else:
+                unavailable_names.append(name)
         try:
             definitions = registry.get_definitions()
             direct_names = [
@@ -2161,8 +2296,23 @@ def _tools(agent: Any) -> dict[str, Any]:
                 entry = None
             toolset = str(getattr(entry, "toolset", "core") or "core")
             toolsets[toolset] = toolsets.get(toolset, 0) + 1
+            try:
+                available = bool(registry.is_tool_available(name))
+            except Exception:
+                available = True
+            try:
+                enabled = bool(registry.is_tool_enabled(name))
+            except Exception:
+                enabled = True
+            try:
+                runtime_available = bool(registry.is_tool_runtime_available(name))
+            except Exception:
+                runtime_available = available
+            requirements = list(getattr(entry, "requires_env", []) or []) if entry else []
             exposure = "direct"
-            if active_bridge and name not in direct_names and name not in BRIDGE_TOOL_NAMES:
+            if not enabled:
+                exposure = "disabled"
+            elif active_bridge and name not in direct_names and name not in BRIDGE_TOOL_NAMES:
                 exposure = "deferred"
             elif name in BRIDGE_TOOL_NAMES:
                 exposure = "bridge"
@@ -2193,17 +2343,28 @@ def _tools(agent: Any) -> dict[str, Any]:
                 "permission": permission_action,
                 "permission_reason": sanitize_text(permission_reason, max_length=220),
                 "exposure": exposure,
+                "enabled": enabled,
+                "runtime_available": runtime_available,
+                "available": available,
+                "requirements": requirements,
             }
             entries.append(item)
-            if active_bridge and name not in direct_names and name not in BRIDGE_TOOL_NAMES:
+            if enabled and active_bridge and name not in direct_names and name not in BRIDGE_TOOL_NAMES:
                 deferred_names.append(name)
+    try:
+        toolset_config = registry.toolset_status() if registry is not None else {}
+    except Exception:
+        toolset_config = {}
 
     return {
         "total": len(names),
+        "available": len(available_names),
+        "unavailable": len(unavailable_names),
         "direct": len([name for name in direct_names if name]),
         "deferred": len(deferred_names),
         "tool_search_active": active_bridge,
         "toolsets": toolsets,
+        "toolset_config": toolset_config,
         "items": entries[:80],
         "diagnostics": _tools_diagnostics(entries, active_bridge),
     }
@@ -2214,15 +2375,23 @@ def _tools_diagnostics(entries: list[dict[str, Any]], active_bridge: bool) -> di
     permission_counts: dict[str, int] = {}
     exposure_counts: dict[str, int] = {}
     toolset_counts: dict[str, int] = {}
+    availability_counts: dict[str, int] = {}
     for entry in entries:
         risk = str(entry.get("risk") or "unknown")
         permission = str(entry.get("permission") or "unknown")
         exposure = str(entry.get("exposure") or "direct")
         toolset = str(entry.get("toolset") or "core")
+        if not entry.get("enabled", True):
+            availability = "disabled"
+        elif entry.get("available", True):
+            availability = "available"
+        else:
+            availability = "unavailable"
         risk_counts[risk] = risk_counts.get(risk, 0) + 1
         permission_counts[permission] = permission_counts.get(permission, 0) + 1
         exposure_counts[exposure] = exposure_counts.get(exposure, 0) + 1
         toolset_counts[toolset] = toolset_counts.get(toolset, 0) + 1
+        availability_counts[availability] = availability_counts.get(availability, 0) + 1
 
     recommendations = []
     if not entries:
@@ -2243,6 +2412,7 @@ def _tools_diagnostics(entries: list[dict[str, Any]], active_bridge: bool) -> di
             "permission": permission_counts,
             "exposure": exposure_counts,
             "toolsets": toolset_counts,
+            "availability": availability_counts,
             "tool_search_active": active_bridge,
         },
         "recommendations": recommendations,
@@ -2272,6 +2442,13 @@ def _auxiliary(agent: Any) -> dict[str, Any]:
         return status
     config = getattr(agent, "auxiliary_config", {})
     return auxiliary_status(config if isinstance(config, dict) else {})
+
+
+def _capabilities(agent: Any) -> dict[str, Any]:
+    status = _safe_call(agent, "capabilities_status", default={})
+    if isinstance(status, dict) and status:
+        return status
+    return CapabilityRegistry.from_agent(agent).payload()
 
 
 def _tasks(agent: Any) -> dict[str, Any]:
@@ -2411,7 +2588,11 @@ def _skill_summary(agent: Any, skill: Any) -> dict[str, Any]:
     tool_names = []
     if tools is not None:
         try:
-            tool_names = list(tools.names())
+            available_names = getattr(tools, "available_names", None)
+            if callable(available_names):
+                tool_names = list(available_names())
+            else:
+                tool_names = list(tools.names())
         except Exception:
             tool_names = []
     if skill_index is not None:
@@ -2818,6 +2999,27 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = sanitize_text(value.strip(), max_length=300)
+        return [text] if text else []
+    if isinstance(value, dict):
+        values = value.keys()
+    else:
+        try:
+            values = list(value)
+        except TypeError:
+            values = [value]
+    result = []
+    for item in values:
+        text = sanitize_text(str(item or "").strip(), max_length=300)
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

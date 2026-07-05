@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
+import threading
+import time
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
+
+from ..toolsets import (
+    ToolsetSelection,
+    expand_tool_patterns,
+    get_all_toolsets,
+    resolve_multiple_toolsets,
+    unmatched_tool_patterns,
+    validate_toolset,
+)
 
 
 TOOL_SEARCH_NAME = "tool_search"
@@ -18,9 +30,11 @@ CORE_TOOLSETS = {
     "browser",
     "code_execution",
     "core",
+    "cron",
     "file",
     "git",
     "memory",
+    "planning",
     "project",
     "session",
     "skills",
@@ -28,6 +42,9 @@ CORE_TOOLSETS = {
     "vision",
     "web",
 }
+
+
+CHECK_FN_TTL_SECONDS = 30.0
 
 
 @dataclass
@@ -71,6 +88,10 @@ class ToolEntry:
         "toolset",
         "emoji",
         "max_result_size_chars",
+        "check_fn",
+        "requires_env",
+        "is_async",
+        "dynamic_schema_overrides",
     )
 
     def __init__(
@@ -82,6 +103,10 @@ class ToolEntry:
         toolset="core",
         emoji="",
         max_result_size_chars=None,
+        check_fn=None,
+        requires_env=None,
+        is_async=False,
+        dynamic_schema_overrides=None,
     ):
         self.name = name
         self.description = description
@@ -90,15 +115,27 @@ class ToolEntry:
         self.toolset = toolset
         self.emoji = emoji
         self.max_result_size_chars = max_result_size_chars
+        self.check_fn = check_fn
+        self.requires_env = requires_env or []
+        self.is_async = bool(is_async)
+        self.dynamic_schema_overrides = dynamic_schema_overrides
 
     def definition(self) -> dict[str, Any]:
+        function = {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        }
+        if self.dynamic_schema_overrides is not None:
+            try:
+                overrides = self.dynamic_schema_overrides()
+                if isinstance(overrides, dict):
+                    function.update(overrides)
+            except Exception:
+                pass
         return {
             "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
-            },
+            "function": function,
         }
 
 
@@ -106,8 +143,15 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, ToolEntry] = {}
         self._tool_search_config = ToolSearchConfig()
+        self._toolset_selection = ToolsetSelection()
         self._last_deferred_names: set[str] = set()
         self._last_tool_search_active = False
+        self._check_fn_cache: dict[Callable[..., Any], tuple[float, bool]] = {}
+        self._check_fn_cache_lock = threading.Lock()
+
+    def configure_tools(self, config: Any = None, *, context_window: int | None = None) -> None:
+        self.configure_tool_search(config, context_window=context_window)
+        self.configure_toolsets(config)
 
     def configure_tool_search(self, config: Any = None, *, context_window: int | None = None) -> None:
         raw = None
@@ -120,6 +164,15 @@ class ToolRegistry:
             context_window=context_window or self._tool_search_config.context_window,
         )
 
+    def configure_toolsets(self, config: Any = None) -> None:
+        if isinstance(config, dict):
+            raw = config.get("toolsets")
+        else:
+            raw = config
+        self._toolset_selection = ToolsetSelection.from_raw(raw)
+        self._last_deferred_names.clear()
+        self._last_tool_search_active = False
+
     def register(
         self,
         name,
@@ -129,6 +182,10 @@ class ToolRegistry:
         toolset="core",
         emoji="",
         max_result_size_chars=None,
+        check_fn=None,
+        requires_env=None,
+        is_async=False,
+        dynamic_schema_overrides=None,
     ):
         self._tools[name] = ToolEntry(
             name,
@@ -138,6 +195,10 @@ class ToolRegistry:
             toolset=toolset,
             emoji=emoji,
             max_result_size_chars=max_result_size_chars,
+            check_fn=check_fn,
+            requires_env=requires_env,
+            is_async=is_async,
+            dynamic_schema_overrides=dynamic_schema_overrides,
         )
 
     def unregister(self, name):
@@ -155,6 +216,37 @@ class ToolRegistry:
     def get_entry(self, name):
         return self._tools.get(name)
 
+    def invalidate_availability_cache(self) -> None:
+        with self._check_fn_cache_lock:
+            self._check_fn_cache.clear()
+
+    def is_tool_available(self, name: str) -> bool:
+        entry = self.get_entry(name)
+        return bool(entry and self._entry_enabled(entry) and self._entry_available(entry))
+
+    def is_tool_runtime_available(self, name: str) -> bool:
+        entry = self.get_entry(name)
+        return bool(entry and self._entry_available(entry))
+
+    def is_tool_enabled(self, name: str) -> bool:
+        entry = self.get_entry(name)
+        return bool(entry and self._entry_enabled(entry))
+
+    def available_names(self) -> list[str]:
+        return [
+            entry.name
+            for entry in self._tools.values()
+            if self._entry_enabled(entry) and self._entry_available(entry)
+        ]
+
+    def enabled_names(self, *, include_unavailable: bool = True) -> list[str]:
+        return [
+            entry.name
+            for entry in self._tools.values()
+            if self._entry_enabled(entry)
+            and (include_unavailable or self._entry_available(entry))
+        ]
+
     def get_max_result_size(self, name, default=None):
         real_name, _, _ = self.resolve_invocation(name, {})
         entry = self.get_entry(real_name)
@@ -162,8 +254,12 @@ class ToolRegistry:
             return entry.max_result_size_chars
         return default
 
-    def get_definitions(self, skip_tool_search_assembly: bool = False):
-        entries = list(self._tools.values())
+    def get_definitions(
+        self,
+        skip_tool_search_assembly: bool = False,
+        include_unavailable: bool = False,
+    ):
+        entries = self._available_entries() if not include_unavailable else self._enabled_entries()
         if skip_tool_search_assembly:
             return [tool.definition() for tool in entries]
 
@@ -194,8 +290,15 @@ class ToolRegistry:
 
         if name not in self._tools:
             return json.dumps({"error": f"Unknown tool: {name}"}, ensure_ascii=False)
+        entry = self._tools[name]
+        if not self._entry_enabled(entry):
+            return json.dumps({"error": f"Tool is disabled by current toolset: {name}"}, ensure_ascii=False)
+        if not self._entry_available(entry):
+            return json.dumps({"error": f"Tool is unavailable: {name}"}, ensure_ascii=False)
         try:
-            return self._tools[name].handler(**(arguments or {}))
+            if entry.is_async:
+                return _run_async_handler(entry.handler, arguments or {})
+            return entry.handler(**(arguments or {}))
         except Exception as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
@@ -210,6 +313,10 @@ class ToolRegistry:
             return name, {}, "tool_call requires a target tool name"
         if requested not in self._tools:
             return requested, {}, f"Unknown deferred tool: {requested}"
+        if not self._entry_enabled(self._tools[requested]):
+            return requested, {}, f"Tool is disabled by current toolset: {requested}"
+        if not self._entry_available(self._tools[requested]):
+            return requested, {}, f"Tool is unavailable: {requested}"
         if not self._is_tool_search_active_for(requested):
             return requested, {}, f"Tool is not in the deferred catalog: {requested}"
 
@@ -220,6 +327,232 @@ class ToolRegistry:
 
     def unwrap_invocation(self, name: str, arguments: dict[str, Any] | None):
         return self.resolve_invocation(name, arguments)
+
+    def check_tool_availability(self) -> tuple[list[str], list[dict[str, Any]]]:
+        available_toolsets = []
+        unavailable = []
+        seen = set()
+        for entry in self._tools.values():
+            toolset = str(entry.toolset or "core")
+            if toolset in seen:
+                continue
+            seen.add(toolset)
+            tool_entries = [
+                candidate
+                for candidate in self._tools.values()
+                if str(candidate.toolset or "core") == toolset
+            ]
+            enabled_entries = [candidate for candidate in tool_entries if self._entry_enabled(candidate)]
+            available = any(self._entry_available(candidate) for candidate in enabled_entries)
+            if available:
+                available_toolsets.append(toolset)
+            else:
+                requirements = []
+                for candidate in tool_entries:
+                    for env_name in candidate.requires_env:
+                        if env_name not in requirements:
+                            requirements.append(env_name)
+                unavailable.append({
+                    "name": toolset,
+                    "env_vars": requirements,
+                    "tools": sorted(candidate.name for candidate in tool_entries),
+                    "enabled": bool(enabled_entries),
+                })
+        return sorted(available_toolsets), unavailable
+
+    def get_available_toolsets(self) -> dict[str, dict[str, Any]]:
+        toolsets: dict[str, dict[str, Any]] = {}
+        for entry in self._tools.values():
+            toolset = str(entry.toolset or "core")
+            item = toolsets.setdefault(
+                toolset,
+                {
+                    "available": False,
+                    "enabled": False,
+                    "runtime_available": False,
+                    "tools": [],
+                    "requirements": [],
+                    "description": "",
+                },
+            )
+            item["tools"].append(entry.name)
+            enabled = self._entry_enabled(entry)
+            runtime_available = self._entry_available(entry)
+            item["enabled"] = item["enabled"] or enabled
+            item["runtime_available"] = item["runtime_available"] or runtime_available
+            item["available"] = item["available"] or (enabled and runtime_available)
+            for env_name in entry.requires_env:
+                if env_name not in item["requirements"]:
+                    item["requirements"].append(env_name)
+        for item in toolsets.values():
+            item["tools"] = sorted(item["tools"])
+        return toolsets
+
+    def get_toolset_requirements(self) -> dict[str, dict[str, Any]]:
+        requirements: dict[str, dict[str, Any]] = {}
+        for entry in self._tools.values():
+            toolset = str(entry.toolset or "core")
+            item = requirements.setdefault(
+                toolset,
+                {
+                    "name": toolset,
+                    "env_vars": [],
+                    "tools": [],
+                },
+            )
+            if entry.name not in item["tools"]:
+                item["tools"].append(entry.name)
+            for env_name in entry.requires_env:
+                if env_name not in item["env_vars"]:
+                    item["env_vars"].append(env_name)
+        for item in requirements.values():
+            item["tools"] = sorted(item["tools"])
+        return requirements
+
+    def toolset_status(self) -> dict[str, Any]:
+        selection = self._toolset_selection
+        registered_names = self.names()
+        custom_toolsets = self._runtime_toolsets()
+        selected_names = set(self._selected_tool_names())
+        disabled_toolset_tools = set(
+            resolve_multiple_toolsets(
+                selection.disabled,
+                registered_names=registered_names,
+                custom_toolsets=custom_toolsets,
+            )
+        )
+        disabled_tools = set(expand_tool_patterns(selection.disabled_tools, registered_names))
+        all_toolsets = get_all_toolsets(custom_toolsets)
+        toolset_items = []
+        for name, definition in all_toolsets.items():
+            resolved = set(
+                resolve_multiple_toolsets(
+                    [name],
+                    registered_names=registered_names,
+                    custom_toolsets=custom_toolsets,
+                )
+            )
+            if not resolved and name not in selection.enabled and name not in selection.disabled:
+                continue
+            toolset_items.append(
+                {
+                    "name": name,
+                    "description": str(definition.get("description") or ""),
+                    "includes": list(definition.get("includes") or []),
+                    "tools": sorted(resolved),
+                    "tool_count": len(resolved),
+                    "enabled": bool(resolved & selected_names),
+                    "configured": name in selection.enabled,
+                    "disabled": name in selection.disabled,
+                }
+            )
+
+        unknown_toolsets = [
+            name
+            for name in [*selection.enabled, *selection.disabled]
+            if not validate_toolset(name, custom_toolsets)
+        ]
+        configured_patterns = [
+            *selection.additional_tools,
+            *selection.disabled_tools,
+        ]
+        return {
+            "enabled": list(selection.enabled),
+            "disabled": list(selection.disabled),
+            "additional_tools": list(selection.additional_tools),
+            "disabled_tools": list(selection.disabled_tools),
+            "custom": sorted(selection.custom_toolsets),
+            "visible_tools": sorted(selected_names),
+            "hidden_tools": sorted(set(registered_names) - selected_names),
+            "counts": {
+                "registered": len(registered_names),
+                "visible": len(selected_names),
+                "hidden": max(0, len(registered_names) - len(selected_names)),
+                "disabled_by_toolset": len(disabled_toolset_tools),
+                "disabled_by_tool": len(disabled_tools),
+            },
+            "toolsets": sorted(toolset_items, key=lambda item: item["name"]),
+            "unknown_toolsets": sorted(set(unknown_toolsets)),
+            "unmatched_patterns": unmatched_tool_patterns(configured_patterns, registered_names),
+        }
+
+    def _enabled_entries(self) -> list[ToolEntry]:
+        return [
+            entry
+            for entry in self._tools.values()
+            if self._entry_enabled(entry)
+        ]
+
+    def _available_entries(self) -> list[ToolEntry]:
+        return [
+            entry
+            for entry in self._tools.values()
+            if self._entry_enabled(entry) and self._entry_available(entry)
+        ]
+
+    def _entry_enabled(self, entry: ToolEntry) -> bool:
+        return entry.name in self._selected_tool_names()
+
+    def _selected_tool_names(self) -> set[str]:
+        selection = self._toolset_selection
+        registered_names = self.names()
+        custom_toolsets = self._runtime_toolsets()
+        selected = set(
+            resolve_multiple_toolsets(
+                selection.enabled,
+                registered_names=registered_names,
+                custom_toolsets=custom_toolsets,
+            )
+        )
+        selected.update(expand_tool_patterns(selection.additional_tools, registered_names))
+        selected.difference_update(
+            resolve_multiple_toolsets(
+                selection.disabled,
+                registered_names=registered_names,
+                custom_toolsets=custom_toolsets,
+            )
+        )
+        selected.difference_update(expand_tool_patterns(selection.disabled_tools, registered_names))
+        return selected
+
+    def _runtime_toolsets(self) -> dict[str, dict[str, Any]]:
+        toolsets = dict(self._toolset_selection.custom_toolsets)
+        grouped: dict[str, list[str]] = {}
+        for entry in self._tools.values():
+            toolset = str(entry.toolset or "core")
+            if not toolset:
+                continue
+            grouped.setdefault(toolset, []).append(entry.name)
+        for toolset, names in grouped.items():
+            if toolset in toolsets:
+                continue
+            toolsets[toolset] = {
+                "description": f"Registered toolset: {toolset}",
+                "tools": sorted(set(names)),
+                "includes": [],
+            }
+        return toolsets
+
+    def _entry_available(self, entry: ToolEntry) -> bool:
+        if entry.check_fn is None:
+            return True
+        return self._check_fn_cached(entry.check_fn)
+
+    def _check_fn_cached(self, check_fn: Callable[..., Any]) -> bool:
+        now = time.monotonic()
+        with self._check_fn_cache_lock:
+            cached = self._check_fn_cache.get(check_fn)
+            if cached is not None:
+                checked_at, value = cached
+                if now - checked_at < CHECK_FN_TTL_SECONDS:
+                    return value
+        try:
+            value = bool(check_fn())
+        except Exception:
+            value = False
+        with self._check_fn_cache_lock:
+            self._check_fn_cache[check_fn] = (now, value)
+        return value
 
     def _partition_entries(self, entries: list[ToolEntry]) -> tuple[list[ToolEntry], list[ToolEntry]]:
         direct = []
@@ -253,7 +586,7 @@ class ToolRegistry:
         return schema_token_estimate >= max(1, threshold_tokens)
 
     def _current_deferred_entries(self) -> list[ToolEntry]:
-        _, deferred_entries = self._partition_entries(list(self._tools.values()))
+        _, deferred_entries = self._partition_entries(self._available_entries())
         return deferred_entries
 
     def _is_tool_search_active_for(self, name: str) -> bool:
@@ -263,7 +596,12 @@ class ToolRegistry:
         if config.enabled == "off":
             return False
         entry = self._tools.get(name)
-        if entry is None or not self._is_deferrable(entry):
+        if (
+            entry is None
+            or not self._entry_enabled(entry)
+            or not self._entry_available(entry)
+            or not self._is_deferrable(entry)
+        ):
             return False
         if config.enabled == "on":
             return True
@@ -303,6 +641,10 @@ class ToolRegistry:
         entry = self._tools.get(name)
         if entry is None:
             return json.dumps({"error": f"Unknown tool: {name}"}, ensure_ascii=False)
+        if not self._entry_enabled(entry):
+            return json.dumps({"error": f"Tool is disabled by current toolset: {name}"}, ensure_ascii=False)
+        if not self._entry_available(entry):
+            return json.dumps({"error": f"Tool is unavailable: {name}"}, ensure_ascii=False)
         if not self._is_tool_search_active_for(name):
             return json.dumps({"error": f"Tool is not deferred: {name}"}, ensure_ascii=False)
         return json.dumps(
@@ -469,6 +811,17 @@ def _truncate(value: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[: max(0, max_chars - 16)] + "... [truncated]"
+
+
+def _run_async_handler(handler: Callable[..., Any], arguments: dict[str, Any]) -> str:
+    result = handler(**arguments)
+    if not hasattr(result, "__await__"):
+        return result
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(result)
+    raise RuntimeError("Async tool handlers cannot run inside an active event loop")
 
 
 def _clamp_int(value: Any, minimum: int, maximum: int, default: int) -> int:

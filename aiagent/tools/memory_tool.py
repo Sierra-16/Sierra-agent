@@ -40,12 +40,14 @@ registry.register(
     name="save_memory",
     description="记住一条信息。target='memory'=项目相关，target='user'=用户画像",
     parameters=SAVE_MEMORY_SCHEMA,
-    handler=save_memory
+    handler=save_memory,
+    toolset="memory",
 )
 
 registry.register(
     name="delete_memory",
     description="删除包含指定关键词的记忆条目",
     parameters=DELETE_MEMORY_SCHEMA,
-    handler=delete_memory
+    handler=delete_memory,
+    toolset="memory",
 )

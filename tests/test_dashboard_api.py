@@ -16,6 +16,7 @@ try:
     from aiagent.dashboard_api import create_dashboard_app
     from aiagent.skills.loader import SkillLoader
     from aiagent.skills.prompt_index import SkillPromptIndex
+    from aiagent.tools.registry import ToolRegistry
 except ModuleNotFoundError as exc:
     TestClient = None
     create_dashboard_app = None
@@ -218,6 +219,30 @@ class SkillApiFakeAgent(FakeAgent):
         )
 
 
+class ToolsetConfigFakeAgent(FakeAgent):
+    def __init__(self):
+        self.tools = ToolRegistry()
+        self.tools.register(
+            name="read_file",
+            description="Read file",
+            parameters={"type": "object", "properties": {"path": {"type": "string"}}},
+            handler=lambda **kwargs: json.dumps({"ok": True}),
+            toolset="file",
+        )
+        self.tools.register(
+            name="write_file",
+            description="Write file",
+            parameters={"type": "object", "properties": {"path": {"type": "string"}}},
+            handler=lambda **kwargs: json.dumps({"ok": True}),
+            toolset="file",
+        )
+        self.messages = []
+        self.conv_id = "toolsets"
+
+    def refresh_capabilities(self):
+        return None
+
+
 @unittest.skipIf(FASTAPI_IMPORT_ERROR is not None, f"FastAPI unavailable: {FASTAPI_IMPORT_ERROR}")
 class DashboardApiTest(unittest.TestCase):
     def test_dashboard_payload_is_structured(self):
@@ -246,6 +271,8 @@ class DashboardApiTest(unittest.TestCase):
         self.assertEqual(payload["tools"]["diagnostics"]["summary"]["total"], 2)
         self.assertEqual(payload["memory"]["providers"][0]["records"], 3)
         self.assertEqual(payload["mcp"]["servers"][0]["name"], "demo")
+        self.assertIn("capabilities", payload)
+        self.assertEqual(payload["capabilities"]["by_name"]["tools"]["metadata"]["total"], 2)
 
     def test_diagnostics_endpoints_report_model_mcp_and_tool_health(self):
         config = {
@@ -294,6 +321,61 @@ class DashboardApiTest(unittest.TestCase):
         self.assertTrue(mcp_items[0]["issues"])
         self.assertEqual(tool_response.status_code, 200)
         self.assertEqual(tool_response.json()["diagnostics"]["summary"]["total"], 2)
+
+    def test_capabilities_endpoint_returns_unified_status(self):
+        app = create_dashboard_app(
+            FakeAgent(),
+            config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+            sierra_dir=".",
+            static_dir="missing-dist",
+        )
+        client = TestClient(app)
+
+        response = client.get("/api/capabilities")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["by_name"]["tools"]["metadata"]["total"], 2)
+        self.assertIn("memory", payload["by_name"])
+
+    def test_toolset_config_endpoint_saves_and_applies_selection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            config = {
+                "active_model": "test",
+                "models": {"test": {"name": "test-model", "context_window": 128000}},
+                "tools": {"toolsets": {"enabled": ["default"]}},
+            }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            agent = ToolsetConfigFakeAgent()
+            app = create_dashboard_app(
+                agent,
+                config=config,
+                config_path=config_path,
+                sierra_dir=".",
+                static_dir="missing-dist",
+            )
+            client = TestClient(app)
+
+            response = client.post(
+                "/api/config/toolsets",
+                json={
+                    "enabled": ["file_readonly"],
+                    "disabled": [],
+                    "additional_tools": [],
+                    "disabled_tools": [],
+                    "custom": {},
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertTrue(agent.tools.is_tool_enabled("read_file"))
+            self.assertFalse(agent.tools.is_tool_enabled("write_file"))
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["tools"]["toolsets"]["enabled"], ["file_readonly"])
 
     def test_skill_api_reads_creates_and_updates_documents(self):
         with tempfile.TemporaryDirectory() as temp_dir:

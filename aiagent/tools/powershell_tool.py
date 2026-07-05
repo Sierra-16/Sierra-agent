@@ -126,4 +126,5 @@ registry.register(
     ),
     parameters=POWERSHELL_SCHEMA,
     handler=powershell,
+    toolset="terminal",
 )

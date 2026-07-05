@@ -41,6 +41,7 @@ from .skill_suggestions import suggest_skill_from_turn
 from .tasks import TaskCheckpointStore, TaskManager
 from .token_utils import estimate_tokens
 from .auxiliary_config import auxiliary_status
+from .capabilities import CapabilityRegistry
 
 
 logger = logging.getLogger(__name__)
@@ -122,9 +123,14 @@ class Agent:
         self.llm = LLMClient(base_url, api_key, model=model, max_tokens=max_tokens, temperature=temperature)
         self.model = model
         self.tools = registry
-        configure_tool_search = getattr(self.tools, "configure_tool_search", None)
-        if callable(configure_tool_search):
-            configure_tool_search(tools_config or {}, context_window=context_window)
+        self.capabilities = None
+        configure_tools = getattr(self.tools, "configure_tools", None)
+        if callable(configure_tools):
+            configure_tools(tools_config or {}, context_window=context_window)
+        else:
+            configure_tool_search = getattr(self.tools, "configure_tool_search", None)
+            if callable(configure_tool_search):
+                configure_tool_search(tools_config or {}, context_window=context_window)
         self.safety = SafetyGate()
         self.permission_policy = PermissionPolicy(permission_config)
         self.background_jobs = BackgroundJobQueue.from_config(background_config)
@@ -307,6 +313,7 @@ class Agent:
             ),
             parameters={"type": "object", "properties": {}},
             handler=self._reload_skills_tool,
+            toolset="skills",
         )
         self.tools.register(
             name="skill_manage",
@@ -348,6 +355,7 @@ class Agent:
                 "required": ["action", "name"],
             },
             handler=self._manage_skill_tool,
+            toolset="skills",
         )
         self.tools.register(
             name="skill_usage_stats",
@@ -367,12 +375,14 @@ class Agent:
                 },
             },
             handler=self._skill_usage_stats_tool,
+            toolset="skills",
         )
         self.tools.register(
             name="cron_list",
             description="List Sierra cron reminders and scheduled prompts.",
             parameters={"type": "object", "properties": {}},
             handler=self._cron_list_tool,
+            toolset="cron",
         )
         self.tools.register(
             name="cron_add",
@@ -393,6 +403,7 @@ class Agent:
                 "required": ["prompt", "interval_minutes"],
             },
             handler=self._cron_add_tool,
+            toolset="cron",
         )
         self.tools.register(
             name="cron_remove",
@@ -403,7 +414,9 @@ class Agent:
                 "required": ["id"],
             },
             handler=self._cron_remove_tool,
+            toolset="cron",
         )
+        self.refresh_capabilities()
         self.system_prompt = self._build_system_prompt()
         self.messages = []
         self.max_iterations = 15
@@ -466,6 +479,7 @@ class Agent:
         )
 
     def _build_system_prompt(self):
+        self.refresh_capabilities()
         memory_text = self.memory_manager.get_prompt_context()
         context_file_text = ""
         try:
@@ -492,7 +506,7 @@ class Agent:
             extra_parts.append(memory_text)
         skills_prompt = self.skill_index.build(
             self.skills,
-            available_tools=self.tools.names(),
+            available_tools=self._available_tool_names(),
         )
         return build_system_prompt(
             extra_context="\n\n".join(extra_parts),
@@ -500,30 +514,21 @@ class Agent:
         )
 
     def _auxiliary_prompt_context(self):
-        vision = self.auxiliary_config.get("vision", {}) if isinstance(self.auxiliary_config, dict) else {}
-        if not isinstance(vision, dict):
-            return "# Auxiliary Capabilities\n- vision: disabled"
-        enabled = bool(vision.get("enabled"))
-        route = str(vision.get("route") or vision.get("provider") or "unknown")
-        model = str(vision.get("model") or "unknown")
-        if enabled:
-            return (
-                "# Auxiliary Capabilities\n"
-                f"- vision: enabled via {route} using {model}.\n"
-                "- When the user uploads, references, or asks about an image, call vision_analyze with the image path or URL.\n"
-                "- Ignore older conversation turns that say vision was disabled; use the current capability status above."
-            )
-        return (
-            "# Auxiliary Capabilities\n"
-            "- vision: disabled. Do not claim you inspected image content unless vision_analyze succeeds."
-        )
+        capabilities = self.refresh_capabilities()
+        return capabilities.prompt_context()
 
     def refresh_system_prompt(self):
         self.system_prompt = self._build_system_prompt()
 
+    def refresh_capabilities(self):
+        self.capabilities = CapabilityRegistry.from_agent(self)
+        return self.capabilities
+
     def reload_auxiliary_config(self, auxiliary_config=None):
         self.auxiliary_config = auxiliary_config if isinstance(auxiliary_config, dict) else {}
         configure_vision_tool(self.workspace, self.auxiliary_config.get("vision", {}))
+        self.refresh_capabilities()
+        self.refresh_system_prompt()
         return self.auxiliary_status()
 
     def set_workspace(self, workspace):
@@ -540,6 +545,7 @@ class Agent:
         for provider in getattr(self.memory_manager, "providers", ()):
             if hasattr(provider, "workspace"):
                 provider.workspace = self.workspace
+        self.refresh_capabilities()
         self.refresh_system_prompt()
         return self.workspace
 
@@ -558,9 +564,15 @@ class Agent:
     def skill_summaries(self, include_unavailable=False):
         return self.skill_index.summaries(
             self.skills,
-            available_tools=self.tools.names(),
+            available_tools=self._available_tool_names(),
             include_unavailable=include_unavailable,
         )
+
+    def _available_tool_names(self):
+        available_names = getattr(self.tools, "available_names", None)
+        if callable(available_names):
+            return available_names()
+        return self.tools.names()
 
     def _reload_skills_tool(self):
         return json.dumps(self.reload_skills(), ensure_ascii=False)
@@ -1237,6 +1249,9 @@ class Agent:
 
     def auxiliary_status(self):
         return auxiliary_status(self.auxiliary_config)
+
+    def capabilities_status(self):
+        return self.refresh_capabilities().payload()
 
     def audit_recent(self, limit=20):
         return self.audit.recent(limit)

@@ -58,4 +58,5 @@ registry.register(
     ),
     parameters=REQUEST_USER_INPUT_SCHEMA,
     handler=request_user_input,
+    toolset="planning",
 )

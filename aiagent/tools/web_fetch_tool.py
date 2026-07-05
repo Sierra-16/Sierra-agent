@@ -58,6 +58,7 @@ registry.register(
     name="web_fetch",
     description="抓取指定 URL 的网页内容，提取纯文本返回",
     parameters=WEB_FETCH_SCHEMA,
-    handler=web_fetch
+    handler=web_fetch,
+    toolset="web",
 )
 

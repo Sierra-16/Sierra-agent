@@ -112,6 +112,60 @@ class ToolSearchTests(unittest.TestCase):
         self.assertIn("mcp__github__create_issue", tool_names)
         self.assertNotIn("tool_search", tool_names)
 
+    def test_unavailable_tool_is_hidden_from_schema_and_search(self):
+        self.registry.register(
+            name="mcp__github__delete_repo",
+            description="Delete a GitHub repository",
+            parameters={
+                "type": "object",
+                "properties": {"repo": {"type": "string"}},
+                "required": ["repo"],
+            },
+            handler=lambda **kwargs: json.dumps({"deleted": True}),
+            toolset="danger",
+            check_fn=lambda: False,
+            requires_env=["GITHUB_TOKEN"],
+        )
+        self.registry.configure_tool_search({"enabled": "on"}, context_window=100000)
+
+        tool_names = {
+            item["function"]["name"]
+            for item in self.registry.get_definitions()
+        }
+        search = json.loads(self.registry.execute("tool_search", {"query": "delete repo"}))
+        result = json.loads(
+            self.registry.execute(
+                "tool_call",
+                {"name": "mcp__github__delete_repo", "arguments": {"repo": "demo"}},
+            )
+        )
+
+        self.assertNotIn("mcp__github__delete_repo", tool_names)
+        self.assertFalse(any(match["name"] == "mcp__github__delete_repo" for match in search["matches"]))
+        self.assertIn("unavailable", result["error"])
+        available, unavailable = self.registry.check_tool_availability()
+        self.assertIn("file", available)
+        danger_info = next(item for item in unavailable if item["name"] == "danger")
+        self.assertIn("GITHUB_TOKEN", danger_info["env_vars"])
+
+    def test_availability_cache_can_be_invalidated(self):
+        state = {"ready": False}
+        self.registry.register(
+            name="optional_tool",
+            description="Optional tool",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda **kwargs: json.dumps({"ok": True}),
+            toolset="optional",
+            check_fn=lambda: state["ready"],
+        )
+
+        self.assertFalse(self.registry.is_tool_available("optional_tool"))
+        state["ready"] = True
+        self.assertFalse(self.registry.is_tool_available("optional_tool"))
+        self.registry.invalidate_availability_cache()
+
+        self.assertTrue(self.registry.is_tool_available("optional_tool"))
+
 
 if __name__ == "__main__":
     unittest.main()

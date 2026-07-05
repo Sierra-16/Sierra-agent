@@ -26,6 +26,7 @@ def configure_vision_tool(
     global _workspace, _vision_config
     _workspace = os.path.abspath(workspace or os.getcwd())
     _vision_config = vision_config if isinstance(vision_config, dict) else {}
+    registry.invalidate_availability_cache()
 
 
 VISION_ANALYZE_PARAMETERS = {
@@ -102,6 +103,14 @@ def vision_status() -> dict[str, Any]:
     }
 
 
+def check_vision_requirements() -> bool:
+    try:
+        VisionAnalyzer(_vision_config)._validate_config()
+        return True
+    except Exception:
+        return False
+
+
 def _json_error(message: str) -> str:
     return json.dumps({"ok": False, "error": message}, ensure_ascii=False)
 
@@ -130,4 +139,6 @@ registry.register(
     toolset="vision",
     emoji="👁️",
     max_result_size_chars=12000,
+    check_fn=check_vision_requirements,
+    requires_env=["auxiliary.vision"],
 )

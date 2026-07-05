@@ -51,4 +51,5 @@ registry.register(
     description="List files and directories. Relative paths resolve under the user workspace.",
     parameters=LIST_DIR_SCHEMA,
     handler=list_directory,
+    toolset="file",
 )

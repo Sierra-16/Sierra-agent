@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from aiagent.tools import registry
 from aiagent.tools.vision_tool import configure_vision_tool, vision_analyze, vision_status
 
 
@@ -109,6 +110,32 @@ class VisionToolTests(unittest.TestCase):
         self.assertEqual(status["route"], "main_model")
         self.assertTrue(status["base_url_set"])
         self.assertTrue(status["api_key_set"])
+
+    def test_tool_schema_is_hidden_until_vision_is_configured(self):
+        configure_vision_tool(None, {"enabled": False})
+
+        disabled_names = {
+            item["function"]["name"]
+            for item in registry.get_definitions()
+        }
+
+        configure_vision_tool(
+            None,
+            {
+                "enabled": True,
+                "provider": "openai_compatible",
+                "model": "vision-model",
+                "base_url": "https://vision.example/v1",
+                "api_key": "vision-key",
+            },
+        )
+        enabled_names = {
+            item["function"]["name"]
+            for item in registry.get_definitions()
+        }
+
+        self.assertNotIn("vision_analyze", disabled_names)
+        self.assertIn("vision_analyze", enabled_names)
 
 
 if __name__ == "__main__":
