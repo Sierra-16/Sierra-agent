@@ -30,6 +30,7 @@ export type DashboardPayload = {
   background: Record<string, any>;
   cron: Record<string, any>;
   skills: Record<string, any>;
+  plugins: Record<string, any>;
   auxiliary: Record<string, any>;
   capabilities: Record<string, any>;
   context: Record<string, any>;

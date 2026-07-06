@@ -21,6 +21,7 @@ export const COMMANDS: CommandDefinition[] = [
   { cmd: "/retry", desc: "重试上一轮" },
   { cmd: "/model", desc: "切换模型" },
   { cmd: "/mcp", desc: "查看 MCP 状态" },
+  { cmd: "/plugins", desc: "查看插件状态" },
   { cmd: "/skills", desc: "查看技能包" },
   { cmd: "/skills-reload", desc: "重新加载技能" },
   { cmd: "/skills-stats", desc: "查看技能使用统计" },

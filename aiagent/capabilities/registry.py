@@ -108,6 +108,13 @@ CAPABILITY_DEFINITIONS: dict[str, CapabilityDefinition] = {
         kind="runtime",
         description="Unified entry point for Web, TUI, and future platform adapters.",
     ),
+    "plugins": CapabilityDefinition(
+        name="plugins",
+        title="Plugins",
+        domain="runtime",
+        kind="runtime",
+        description="Manifest-based Sierra extensions for providers, tools, and capabilities.",
+    ),
     "tasks": CapabilityDefinition(
         name="tasks",
         title="Tasks",
@@ -167,6 +174,7 @@ class CapabilityRegistry:
                 _mcp_item(_safe_call(agent, "mcp_status", default={})),
                 _memory_item(_safe_call(agent, "memory_status", default={})),
                 _skills_item(_safe_call(agent, "skill_summaries", default=[], include_unavailable=True)),
+                _plugins_item(_safe_call(agent, "plugin_status", default={})),
                 _gateway_item(agent),
                 _tasks_item(
                     current=_safe_call(agent, "task_status", default=None),
@@ -191,6 +199,7 @@ class CapabilityRegistry:
         task_recovery: dict[str, Any] | None = None,
         cron_status: dict[str, Any] | None = None,
         background_status: dict[str, Any] | None = None,
+        plugin_status: dict[str, Any] | None = None,
         gateway_enabled: bool = True,
     ) -> "CapabilityRegistry":
         items = []
@@ -203,6 +212,7 @@ class CapabilityRegistry:
                 _mcp_item(mcp_status or {}),
                 _memory_item(memory_status or {}),
                 _skills_item(skill_summaries or []),
+                _plugins_item(plugin_status or {}),
                 _gateway_item(None, enabled=gateway_enabled),
                 _tasks_item(current=task_status, recovery=task_recovery),
                 _cron_item(cron_status or {}),
@@ -448,6 +458,40 @@ def _skills_item(summaries: list[dict[str, Any]]) -> dict[str, Any]:
         metadata={
             "total": len(summaries),
             "available": len(available),
+        },
+    )
+
+
+def _plugins_item(status: dict[str, Any]) -> dict[str, Any]:
+    status = status if isinstance(status, dict) else {}
+    total = int(status.get("total", 0) or 0)
+    loaded = int(status.get("loaded", 0) or 0)
+    failed = int(status.get("failed", 0) or 0)
+    providers = status.get("providers") if isinstance(status.get("providers"), dict) else {}
+    provider_items = providers.get("items") if isinstance(providers, dict) else []
+    provider_items = provider_items if isinstance(provider_items, list) else []
+    active_providers = [
+        provider
+        for provider in provider_items
+        if isinstance(provider, dict) and provider.get("active") and provider.get("enabled")
+    ]
+    issues = []
+    if total <= 0:
+        issues.append("no_plugins_discovered")
+    if failed:
+        issues.append("plugin_load_failed")
+    return _runtime_item(
+        "plugins",
+        enabled=bool(total),
+        available=bool(loaded) and failed == 0,
+        issues=issues,
+        metadata={
+            "total": total,
+            "enabled": int(status.get("enabled", 0) or 0),
+            "loaded": loaded,
+            "failed": failed,
+            "providers": len(provider_items),
+            "active_providers": len(active_providers),
         },
     )
 

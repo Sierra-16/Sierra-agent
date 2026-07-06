@@ -84,6 +84,7 @@ def validate_startup_config(config: dict[str, Any]) -> None:
 
     _validate_search(config, issues)
     _validate_auxiliary(config, issues)
+    _validate_plugins(config, issues)
     _validate_vector_memory(config, issues)
     _validate_mcp_servers(config, issues)
 
@@ -307,6 +308,26 @@ def _validate_optional_secret_reference(
                 "先设置环境变量，或关闭该能力。",
             )
         )
+
+
+def _validate_plugins(config: dict[str, Any], issues: list[ConfigIssue]) -> None:
+    plugins = config.get("plugins")
+    if plugins is None:
+        return
+    if not isinstance(plugins, dict):
+        issues.append(ConfigIssue("plugins", "plugins must be an object."))
+        return
+
+    for key in ("enabled", "disabled", "roots"):
+        value = plugins.get(key)
+        if value is None or isinstance(value, str):
+            continue
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            issues.append(ConfigIssue(f"plugins.{key}", f"{key} must be a string array."))
+
+    plugin_config = plugins.get("config")
+    if plugin_config is not None and not isinstance(plugin_config, dict):
+        issues.append(ConfigIssue("plugins.config", "plugins.config must be an object."))
 
 
 def _auxiliary_uses_model_credentials(provider: str, capability: dict[str, Any]) -> bool:

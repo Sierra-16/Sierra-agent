@@ -133,6 +133,15 @@ class ConfigValidationTests(unittest.TestCase):
 
         validate_startup_config(config)
 
+    def test_plugins_config_shape_is_validated(self):
+        config = self.base_config()
+        config["plugins"] = {"roots": [123]}
+
+        with self.assertRaises(StartupConfigError) as ctx:
+            validate_startup_config(config)
+
+        self.assertIn("plugins.roots", str(ctx.exception))
+
     def test_invalid_json_is_reported_with_line_number(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"

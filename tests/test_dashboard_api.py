@@ -14,6 +14,7 @@ try:
     from fastapi.testclient import TestClient
 
     from aiagent.dashboard_api import create_dashboard_app
+    from aiagent.conversation_store import ConversationStore
     from aiagent.skills.loader import SkillLoader
     from aiagent.skills.prompt_index import SkillPromptIndex
     from aiagent.tools.registry import ToolRegistry
@@ -160,6 +161,41 @@ class FakeAgent:
         self.messages.append({"role": "user", "content": message})
         self.messages.append({"role": "assistant", "content": "Sierra heard you."})
         return "Sierra heard you."
+
+
+class StoreBackedFakeAgent(FakeAgent):
+    def __init__(self, store):
+        self.store = store
+        self.session_db = None
+        self.conv_id = "active"
+        self.messages = [{"role": "user", "content": "active message"}]
+
+    def usage_snapshot(self):
+        return {
+            "input": 10,
+            "output": 5,
+            "context": 100,
+            "context_window": 256000,
+            "context_estimated": True,
+            "compression_count": 0,
+        }
+
+    def load_conversation(self, conv_id):
+        self.conv_id = conv_id
+        self.messages, _usage = self.store.load(conv_id)
+
+    def list_conversations(self):
+        return self.store.list_all()
+
+    def rename_conversation(self, conv_id, title):
+        return {"ok": self.store.rename(conv_id, title), "id": conv_id, "title": title}
+
+    def delete_conversation(self, conv_id):
+        deleted = self.store.delete(conv_id)
+        if self.conv_id == conv_id:
+            self.conv_id = None
+            self.messages = []
+        return {"ok": deleted, "id": conv_id, "deleted": deleted}
 
 
 class NoisyFakeAgent(FakeAgent):
@@ -662,6 +698,62 @@ class DashboardApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["messages"], [])
+
+    def test_conversation_preview_does_not_activate_agent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ConversationStore(storage_dir=temp_dir)
+            store.save(
+                "conv-1",
+                [{"role": "user", "content": "preview hello"}],
+                {"input": 1},
+                "preview",
+            )
+            agent = StoreBackedFakeAgent(store)
+            app = create_dashboard_app(
+                agent,
+                config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+                sierra_dir=".",
+                static_dir="missing-dist",
+            )
+            client = TestClient(app)
+
+            response = client.get("/api/conversations/conv-1/preview")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["messages"][0]["text"], "preview hello")
+        self.assertEqual(agent.conv_id, "active")
+
+    def test_conversation_activate_rename_and_delete_endpoints(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ConversationStore(storage_dir=temp_dir)
+            store.save(
+                "conv-1",
+                [{"role": "user", "content": "loaded hello"}],
+                {"input": 1},
+                "old",
+            )
+            agent = StoreBackedFakeAgent(store)
+            app = create_dashboard_app(
+                agent,
+                config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+                sierra_dir=".",
+                static_dir="missing-dist",
+            )
+            client = TestClient(app)
+
+            activate = client.post("/api/conversations/conv-1/activate")
+            rename = client.patch("/api/conversations/conv-1", json={"title": "new name"})
+            delete = client.delete("/api/conversations/conv-1")
+
+        self.assertEqual(activate.status_code, 200)
+        self.assertTrue(activate.json()["ok"])
+        self.assertEqual(agent.conv_id, None)
+        self.assertEqual(rename.status_code, 200)
+        self.assertTrue(rename.json()["ok"])
+        self.assertEqual(delete.status_code, 200)
+        self.assertTrue(delete.json()["ok"])
 
     def test_context_suggestions_include_workspace_references(self):
         with tempfile.TemporaryDirectory() as temp_dir:

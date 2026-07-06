@@ -72,6 +72,10 @@ class UploadRequest(BaseModel):
     content_base64: str = Field(min_length=1, max_length=40_000_000)
 
 
+class ConversationRenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+
+
 class ModelConfigRequest(BaseModel):
     key: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
@@ -168,6 +172,13 @@ def create_dashboard_app(
         return {
             "ok": True,
             **_capabilities(app.state.gateway.agent),
+        }
+
+    @app.get("/api/plugins")
+    def plugins() -> dict[str, Any]:
+        return {
+            "ok": True,
+            **_plugins(app.state.gateway.agent),
         }
 
     @app.get("/api/config/models")
@@ -432,9 +443,73 @@ def create_dashboard_app(
             filename=target.name,
         )
 
+    @app.get("/api/conversations/{conversation_id}/preview")
+    def conversation_preview(conversation_id: str) -> dict[str, Any]:
+        conversation_id = _safe_conversation_id(conversation_id)
+        if not conversation_id:
+            return {"id": "", "messages": []}
+        return _conversation_preview_payload(app.state.gateway.agent, conversation_id)
+
+    @app.post("/api/conversations/{conversation_id}/activate")
+    def conversation_activate(conversation_id: str) -> dict[str, Any]:
+        conversation_id = _safe_conversation_id(conversation_id)
+        if not conversation_id:
+            return {"ok": False, "id": "", "messages": []}
+        with app.state.chat_lock:
+            app.state.gateway.agent.load_conversation(conversation_id)
+            usage = app.state.gateway.agent.usage_snapshot()
+            messages = _web_messages(getattr(app.state.gateway.agent, "messages", []))
+        return {
+            "ok": True,
+            "id": conversation_id,
+            "messages": messages,
+            "usage": _usage(usage if isinstance(usage, dict) else {}),
+        }
+
+    @app.patch("/api/conversations/{conversation_id}")
+    def conversation_rename(conversation_id: str, request: ConversationRenameRequest) -> dict[str, Any]:
+        conversation_id = _safe_conversation_id(conversation_id)
+        title = sanitize_text(request.title.strip(), max_length=120)
+        if not conversation_id or not title:
+            return {"ok": False, "error": "conversation id and title are required"}
+        with app.state.chat_lock:
+            result = _safe_call(
+                app.state.gateway.agent,
+                "rename_conversation",
+                conversation_id,
+                title,
+                default={"ok": False, "error": "rename is not available"},
+            )
+        if not isinstance(result, dict):
+            result = {"ok": bool(result), "id": conversation_id, "title": title}
+        result.setdefault("id", conversation_id)
+        result.setdefault("title", title)
+        result["conversation"] = _conversation(app.state.gateway.agent)
+        return result
+
+    @app.delete("/api/conversations/{conversation_id}")
+    def conversation_delete(conversation_id: str) -> dict[str, Any]:
+        conversation_id = _safe_conversation_id(conversation_id)
+        if not conversation_id:
+            return {"ok": False, "error": "conversation id is required"}
+        with app.state.chat_lock:
+            result = _safe_call(
+                app.state.gateway.agent,
+                "delete_conversation",
+                conversation_id,
+                default={"ok": False, "error": "delete is not available"},
+            )
+            usage = app.state.gateway.agent.usage_snapshot()
+        if not isinstance(result, dict):
+            result = {"ok": bool(result), "id": conversation_id}
+        result.setdefault("id", conversation_id)
+        result["usage"] = _usage(usage if isinstance(usage, dict) else {})
+        result["conversation"] = _conversation(app.state.gateway.agent)
+        return result
+
     @app.get("/api/conversations/{conversation_id}")
     def conversation(conversation_id: str) -> dict[str, Any]:
-        conversation_id = sanitize_text(conversation_id.strip(), max_length=120)
+        conversation_id = _safe_conversation_id(conversation_id)
         if not conversation_id:
             return {"id": "", "messages": []}
         with app.state.chat_lock:
@@ -770,6 +845,10 @@ def _execute_dashboard_command(app: FastAPI, request: CommandRequest) -> dict[st
     if command == "mcp":
         status = _safe_call(agent, "mcp_status", default={})
         return _ok("mcp", _format_mcp(status if isinstance(status, dict) else {}), status=status)
+
+    if command == "plugins":
+        status = _safe_call(agent, "plugin_status", default={})
+        return _ok("plugins", _format_plugins(status if isinstance(status, dict) else {}), status=status)
 
     if command == "skills":
         skills = _safe_call(agent, "skill_summaries", default=[], include_unavailable=True)
@@ -1894,6 +1973,55 @@ def _format_mcp(status: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_plugins(status: dict[str, Any]) -> str:
+    if not isinstance(status, dict):
+        return "Plugins are not available."
+    lines = [
+        "Plugins · "
+        + str(status.get("loaded", 0))
+        + "/"
+        + str(status.get("total", 0))
+        + " loaded"
+    ]
+    for item in status.get("items", [])[:40]:
+        state = "loaded" if item.get("loaded") else "enabled" if item.get("enabled") else "disabled"
+        if item.get("error"):
+            state = "failed"
+        lines.append(
+            "- "
+            + str(item.get("id") or item.get("name") or "plugin")
+            + " · "
+            + state
+            + " · "
+            + str(item.get("kind") or "plugin")
+        )
+        providers = item.get("registered_providers") or []
+        if providers:
+            lines.append("  providers: " + ", ".join(str(provider) for provider in providers))
+        if item.get("error"):
+            lines.append("  error: " + str(item.get("error")))
+    providers = (status.get("providers") or {}).get("items") or []
+    if providers:
+        lines.append("")
+        lines.append("Providers")
+        for provider in providers[:40]:
+            enabled = "on" if provider.get("enabled") else "off"
+            available = "ready" if provider.get("available", True) else "needs config"
+            lines.append(
+                "- "
+                + str(provider.get("kind") or "provider")
+                + ":"
+                + str(provider.get("name") or "unknown")
+                + " · "
+                + enabled
+                + " · "
+                + available
+            )
+    if not status.get("items"):
+        lines.append("No plugin manifests discovered.")
+    return "\n".join(lines)
+
+
 def _format_skills(skills: list[dict[str, Any]]) -> str:
     if not skills:
         return "暂无可用技能。"
@@ -2180,6 +2308,7 @@ def build_dashboard_payload(
         "background": _background(agent),
         "cron": _cron(agent),
         "skills": _skills(agent),
+        "plugins": _plugins(agent),
         "auxiliary": _auxiliary(agent),
         "capabilities": _capabilities(agent),
         "context": _context(agent),
@@ -2442,6 +2571,11 @@ def _auxiliary(agent: Any) -> dict[str, Any]:
         return status
     config = getattr(agent, "auxiliary_config", {})
     return auxiliary_status(config if isinstance(config, dict) else {})
+
+
+def _plugins(agent: Any) -> dict[str, Any]:
+    status = _safe_call(agent, "plugin_status", default={})
+    return status if isinstance(status, dict) else {}
 
 
 def _capabilities(agent: Any) -> dict[str, Any]:
@@ -2751,6 +2885,65 @@ def _web_messages(messages: Any) -> list[dict[str, str]]:
         if text:
             result.append({"role": role, "text": text})
     return result[-80:]
+
+
+def _safe_conversation_id(value: Any) -> str:
+    conversation_id = sanitize_text(str(value or "").strip(), max_length=120)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", conversation_id):
+        return ""
+    return conversation_id
+
+
+def _conversation_preview_payload(agent: Any, conversation_id: str) -> dict[str, Any]:
+    messages: list[dict[str, Any]] = []
+    usage: dict[str, Any] = {}
+    found = False
+
+    store = getattr(agent, "store", None)
+    if store is not None:
+        try:
+            loaded_messages, loaded_usage = store.load(conversation_id)
+            if isinstance(loaded_messages, list):
+                messages = loaded_messages
+                found = bool(messages)
+            if isinstance(loaded_usage, dict):
+                usage = loaded_usage
+        except Exception:
+            messages = []
+            usage = {}
+
+    if not messages:
+        session_db = getattr(agent, "session_db", None)
+        if session_db is not None:
+            try:
+                loaded_messages = session_db.get_messages(conversation_id)
+                if isinstance(loaded_messages, list):
+                    messages = loaded_messages
+                    found = bool(messages)
+                session = session_db.get_session(conversation_id) or {}
+                if isinstance(session, dict):
+                    usage = {
+                        "input": session.get("input_tokens", 0),
+                        "output": session.get("output_tokens", 0),
+                    }
+            except Exception:
+                pass
+
+    try:
+        current_usage = agent.usage_snapshot()
+    except Exception:
+        current_usage = {}
+    if isinstance(current_usage, dict):
+        for key in ("context_window", "model_context_window", "context_budget"):
+            if key in current_usage and key not in usage:
+                usage[key] = current_usage[key]
+
+    return {
+        "ok": found,
+        "id": conversation_id,
+        "messages": _web_messages(messages),
+        "usage": _usage(usage if isinstance(usage, dict) else {}),
+    }
 
 
 def _sierra_frame(root_dir: Path) -> dict[str, Any] | None:

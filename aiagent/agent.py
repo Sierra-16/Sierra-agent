@@ -42,6 +42,7 @@ from .tasks import TaskCheckpointStore, TaskManager
 from .token_utils import estimate_tokens
 from .auxiliary_config import auxiliary_status
 from .capabilities import CapabilityRegistry
+from .plugins import PluginManager
 
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,9 @@ class Agent:
         cron_config=None,
         checkpoint_config=None,
         tools_config=None,
+        plugin_config=None,
         auxiliary_config=None,
+        app_config=None,
         workspace=None,
         sierra_dir=None,
     ):
@@ -135,12 +138,21 @@ class Agent:
         self.permission_policy = PermissionPolicy(permission_config)
         self.background_jobs = BackgroundJobQueue.from_config(background_config)
         self.auxiliary_config = auxiliary_config if isinstance(auxiliary_config, dict) else {}
+        self.plugin_config = plugin_config if isinstance(plugin_config, dict) else {}
+        self.app_config = app_config if isinstance(app_config, dict) else {}
         self.sierra_dir = os.path.abspath(
             sierra_dir or os.path.join(os.path.dirname(__file__), "..")
         )
         self.workspace = os.path.abspath(workspace or ".")
         set_tool_workspace(self.workspace)
         configure_vision_tool(self.workspace, self.auxiliary_config.get("vision", {}))
+        self.plugin_manager = PluginManager.from_config(
+            self.plugin_config,
+            sierra_dir=self.sierra_dir,
+            workspace=self.workspace,
+            tool_registry=self.tools,
+            app_config=self.app_config,
+        ).discover_and_load()
         self.audit = AuditLogger.from_config(
             audit_config,
             base_dir=self.sierra_dir,
@@ -531,6 +543,25 @@ class Agent:
         self.refresh_system_prompt()
         return self.auxiliary_status()
 
+    def reload_plugins(self, plugin_config=None, app_config=None):
+        if isinstance(plugin_config, dict):
+            self.plugin_config = plugin_config
+        if isinstance(app_config, dict):
+            self.app_config = app_config
+        old_manager = getattr(self, "plugin_manager", None)
+        if old_manager is not None:
+            old_manager.close()
+        self.plugin_manager = PluginManager.from_config(
+            self.plugin_config,
+            sierra_dir=self.sierra_dir,
+            workspace=self.workspace,
+            tool_registry=self.tools,
+            app_config=self.app_config,
+        ).discover_and_load()
+        self.refresh_capabilities()
+        self.refresh_system_prompt()
+        return self.plugin_status()
+
     def set_workspace(self, workspace):
         self.workspace = os.path.abspath(workspace or ".")
         set_tool_workspace(self.workspace)
@@ -538,6 +569,8 @@ class Agent:
         configure_vision_tool(self.workspace, self.auxiliary_config.get("vision", {}))
         if getattr(self, "mcp", None) is not None:
             self.mcp.workspace = self.workspace
+        if getattr(self, "plugin_manager", None) is not None:
+            self.plugin_manager.workspace = self.workspace
         if getattr(self, "task_manager", None) is not None:
             self.task_manager.workspace = self.workspace
             self.task_manager.store.mark_interrupted(self.workspace)
@@ -1187,6 +1220,42 @@ class Agent:
     def list_conversations(self):
         return self.store.list_all()
 
+    def rename_conversation(self, conv_id, title):
+        title = " ".join(str(title or "").split())[:120]
+        if not conv_id or not title:
+            return {"ok": False, "error": "conversation id and title are required"}
+        renamed = self.store.rename(conv_id, title)
+        session_renamed = False
+        if self.session_db is not None:
+            try:
+                session_renamed = self.session_db.rename_session(conv_id, title)
+            except Exception as exc:
+                logger.warning("Session database rename failed: %s", exc)
+        if not renamed and not session_renamed:
+            return {"ok": False, "error": "conversation not found"}
+        return {"ok": True, "id": conv_id, "title": title}
+
+    def delete_conversation(self, conv_id):
+        if not conv_id:
+            return {"ok": False, "error": "conversation id is required"}
+        deleted = self.store.delete(conv_id)
+        session_deleted = False
+        if self.session_db is not None:
+            try:
+                session_deleted = self.session_db.delete_session(conv_id)
+            except Exception as exc:
+                logger.warning("Session database delete failed: %s", exc)
+        if not deleted and not session_deleted:
+            return {"ok": False, "error": "conversation not found"}
+        if self.conv_id == conv_id:
+            self.messages = []
+            self.conv_id = None
+            if self.task_manager is not None:
+                self.task_manager.bind_conversation(None)
+            self.refresh_context_estimate()
+            self.refresh_system_prompt()
+        return {"ok": True, "id": conv_id, "deleted": True}
+
     def _bootstrap_session_db_from_json(self):
         if self.session_db is None:
             return
@@ -1249,6 +1318,12 @@ class Agent:
 
     def auxiliary_status(self):
         return auxiliary_status(self.auxiliary_config)
+
+    def plugin_status(self):
+        manager = getattr(self, "plugin_manager", None)
+        if manager is None:
+            return {}
+        return manager.status(self.auxiliary_config)
 
     def capabilities_status(self):
         return self.refresh_capabilities().payload()
@@ -1544,6 +1619,8 @@ class Agent:
             self.memory_manager.close()
             self.skill_usage.close()
             self.mcp.close_all()
+            if getattr(self, "plugin_manager", None) is not None:
+                self.plugin_manager.close()
             if self.session_db is not None:
                 self.session_db.close()
     

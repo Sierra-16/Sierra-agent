@@ -1,0 +1,25 @@
+{
+  "id": "image_generation.openai_compatible",
+  "name": "OpenAI-compatible Image Generation",
+  "kind": "provider",
+  "version": "0.1.0",
+  "description": "Adds an OpenAI-compatible image generation provider surface for Sierra.",
+  "module": "aiagent.plugins.builtin.image_generation_openai_compatible.provider",
+  "entrypoint": "register",
+  "enabled_by_default": true,
+  "capabilities": ["image_generation"],
+  "config_schema": {
+    "config_path": "auxiliary.image_generation",
+    "fields": {
+      "enabled": "boolean",
+      "provider": "openai_compatible",
+      "credentials_model": "model key that supplies base_url/api_key",
+      "base_url": "optional OpenAI-compatible API base URL",
+      "api_key": "optional direct API key",
+      "model": "image generation model name",
+      "timeout": "request timeout seconds",
+      "size": "optional output size",
+      "quality": "optional quality preset"
+    }
+  }
+}

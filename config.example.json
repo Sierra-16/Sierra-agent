@@ -81,6 +81,12 @@
       "max_search_limit": 20
     }
   },
+  "plugins": {
+    "enabled": [],
+    "disabled": [],
+    "roots": ["plugins"],
+    "config": {}
+  },
   "audit": {
     "enabled": true,
     "path": "logs/tool_audit.jsonl",

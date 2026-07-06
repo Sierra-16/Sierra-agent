@@ -306,6 +306,29 @@ class SessionDB:
             ).fetchone()
         return dict(row) if row else None
 
+    def rename_session(self, session_id: str, title: str) -> bool:
+        title = _clean_text(title, 120)
+        if not session_id or not title:
+            return False
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
+                (title, time.time(), session_id),
+            )
+            self._conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_session(self, session_id: str) -> bool:
+        if not session_id:
+            return False
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM sessions WHERE id = ?",
+                (session_id,),
+            )
+            self._conn.commit()
+        return cursor.rowcount > 0
+
     def search_messages(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         query = str(query or "").strip()
         if not query:

@@ -377,6 +377,14 @@ input:focus-visible {
   padding: 2px 4px 6px;
 }
 
+.session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .session-link {
   display: flex;
   align-items: flex-start;
@@ -406,6 +414,82 @@ input:focus-visible {
 
 .session-link.active {
   transform: translateX(2px);
+}
+
+.session-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transform: translateX(4px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.session-row:hover .session-actions,
+.session-row:focus-within .session-actions,
+.session-row.active .session-actions {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.session-action {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9px;
+  color: rgba(238, 246, 226, 0.82);
+  background: rgba(9, 22, 16, 0.36);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.session-action:hover {
+  color: #fff8d7;
+  border-color: rgba(242, 211, 126, 0.45);
+  background: rgba(242, 211, 126, 0.14);
+  transform: translateY(-1px);
+}
+
+.session-action.danger:hover {
+  color: #ffd9ce;
+  border-color: rgba(255, 128, 92, 0.5);
+  background: rgba(166, 66, 42, 0.22);
+}
+
+.session-action.confirm:hover {
+  color: #dfffd1;
+  border-color: rgba(126, 226, 112, 0.52);
+  background: rgba(84, 168, 92, 0.22);
+}
+
+.session-edit-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px 28px;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid rgba(242, 211, 126, 0.36);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(134, 217, 106, 0.08)),
+    rgba(8, 19, 13, 0.38);
+}
+
+.session-edit-form input {
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  outline: none;
+  color: #fff8d7;
+  background: transparent;
+  font: inherit;
 }
 
 .session-link span,

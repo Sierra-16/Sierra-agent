@@ -501,6 +501,7 @@ const slashCommands: CompletionItem[] = [
   { kind: "command", label: "/cron-add", detail: "创建定时提醒：分钟 + 内容", value: "/cron-add " },
   { kind: "command", label: "/cron-remove", detail: "删除定时提醒", value: "/cron-remove " },
   { kind: "command", label: "/mcp", detail: "查看 MCP 连接状态", value: "/mcp" },
+  { kind: "command", label: "/plugins", detail: "查看插件状态", value: "/plugins" },
   { kind: "command", label: "/skills", detail: "查看可用技能", value: "/skills" },
   { kind: "command", label: "/skills-reload", detail: "重新加载技能", value: "/skills-reload" },
   { kind: "command", label: "/skills-stats", detail: "查看技能使用统计", value: "/skills-stats" },

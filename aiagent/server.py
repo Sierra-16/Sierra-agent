@@ -579,6 +579,14 @@ def run_server(
                 "stats": stats,
             }, ensure_ascii=False))
 
+        elif cmd == "plugins":
+            status = current_agent.plugin_status()
+            stdout(json.dumps({
+                "type": "ok",
+                "text": _format_plugins(status),
+                "plugins": status,
+            }, ensure_ascii=False))
+
         elif cmd == "reload_config":
             if not config_path:
                 stdout(json.dumps({
@@ -633,6 +641,10 @@ def run_server(
             else:
                 current_agent.reload_auxiliary_config(
                     resolve_auxiliary_config(next_config)
+                )
+                current_agent.reload_plugins(
+                    next_config.get("plugins", {}),
+                    next_config,
                 )
             stdout(json.dumps({
                 "type": "config_reloaded",
@@ -928,6 +940,55 @@ def _format_skill_usage_stats(stats: dict) -> str:
         )
     if not stats.get("skills"):
         lines.append("No skill usage has been recorded yet.")
+    return "\n".join(lines)
+
+
+def _format_plugins(status: dict) -> str:
+    if not isinstance(status, dict):
+        return "Plugins are not available."
+    lines = [
+        "Plugins · "
+        + str(status.get("loaded", 0))
+        + "/"
+        + str(status.get("total", 0))
+        + " loaded"
+    ]
+    for item in status.get("items", [])[:30]:
+        state = "loaded" if item.get("loaded") else "enabled" if item.get("enabled") else "disabled"
+        if item.get("error"):
+            state = "failed"
+        lines.append(
+            "- "
+            + str(item.get("id") or item.get("name") or "plugin")
+            + " · "
+            + state
+            + " · "
+            + str(item.get("kind") or "plugin")
+        )
+        providers = item.get("registered_providers") or []
+        if providers:
+            lines.append("  providers: " + ", ".join(str(provider) for provider in providers))
+        if item.get("error"):
+            lines.append("  error: " + str(item.get("error")))
+    providers = (status.get("providers") or {}).get("items") or []
+    if providers:
+        lines.append("")
+        lines.append("Providers:")
+        for provider in providers[:30]:
+            enabled = "on" if provider.get("enabled") else "off"
+            available = "ready" if provider.get("available", True) else "needs config"
+            lines.append(
+                "- "
+                + str(provider.get("kind") or "provider")
+                + ":"
+                + str(provider.get("name") or "unknown")
+                + " · "
+                + enabled
+                + " · "
+                + available
+            )
+    if not status.get("items"):
+        lines.append("No plugin manifests discovered.")
     return "\n".join(lines)
 
 

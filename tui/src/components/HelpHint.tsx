@@ -19,6 +19,7 @@ export const HelpHint: React.FC<HelpHintProps> = ({ theme, cols }) => {
     ["/undo [n]", "撤回最近 n 轮"],
     ["/retry", "重试上一轮"],
     ["/mcp", "查看 MCP 连接"],
+    ["/plugins", "查看插件状态"],
     ["/skills", "查看技能包"],
     ["/skills-reload", "重新加载技能"],
     ["/skills-stats", "查看技能使用统计"],

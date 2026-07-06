@@ -1,0 +1,20 @@
+{
+  "id": "tts.edge",
+  "name": "Edge Text To Speech",
+  "kind": "provider",
+  "version": "0.1.0",
+  "description": "Adds a local Edge-style text-to-speech provider surface for Sierra.",
+  "module": "aiagent.plugins.builtin.tts_edge.provider",
+  "entrypoint": "register",
+  "enabled_by_default": true,
+  "capabilities": ["tts"],
+  "config_schema": {
+    "config_path": "auxiliary.tts",
+    "fields": {
+      "enabled": "boolean",
+      "provider": "edge",
+      "voice": "voice id, for example zh-CN-XiaoxiaoNeural",
+      "format": "audio format, for example mp3"
+    }
+  }
+}

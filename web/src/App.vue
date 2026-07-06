@@ -8,8 +8,10 @@
       :nav-items="mainNav"
       :payload="payload"
       :recent-sessions="recentSessions"
+      @delete-session="deleteSession"
       @new-chat="startLocalChat"
       @open-session="openSession"
+      @rename-session="renameSession"
       @refresh="loadDashboard"
       @open-settings="settingsOpen = true"
       @select-view="activeView = $event"
@@ -98,6 +100,9 @@ let timer: number | undefined;
 let activeChatAbortController: AbortController | null = null;
 let shellMotion: ReturnType<typeof gsap.context> | undefined;
 let toolRunCounter = 0;
+let conversationLoadSeq = 0;
+let chatRunSeq = 0;
+let conversationActivationPromise: Promise<void> | null = null;
 const activeToolRuns = new Map<string, string>();
 
 const mainNav: NavItem[] = [
@@ -187,10 +192,44 @@ function openSession(sessionId: string) {
   loadConversation(sessionId);
 }
 
+async function activateConversation(sessionId: string, requestId: number) {
+  try {
+    const response = await fetch(`/api/conversations/${encodeURIComponent(sessionId)}/activate`, {
+      method: "POST"
+    });
+    const data = await response.json();
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || `Conversation activate API ${response.status}`);
+    }
+    if (requestId !== conversationLoadSeq) {
+      return;
+    }
+    applyUsageSnapshot(data.usage);
+    await loadDashboard({ bootstrap: false });
+  } catch (err) {
+    if (requestId === conversationLoadSeq) {
+      error.value = err instanceof Error ? err.message : String(err);
+    }
+  } finally {
+    if (requestId === conversationLoadSeq) {
+      loadingConversation.value = false;
+      conversationActivationPromise = null;
+    }
+  }
+}
+
 async function startLocalChat() {
+  conversationLoadSeq += 1;
+  chatRunSeq += 1;
+  activeChatAbortController?.abort();
+  if (sending.value) {
+    void fetch("/api/chat/cancel", { method: "POST" });
+  }
+  conversationActivationPromise = null;
   activeView.value = "chat";
   activeSessionId.value = "";
   sending.value = false;
+  loadingConversation.value = false;
   activityEvents.value = [];
   try {
     await runCommandPayload({ command: "new", text: "/new" }, { appendUser: false, appendResult: false });
@@ -211,26 +250,133 @@ async function startLocalChat() {
 }
 
 async function loadConversation(sessionId: string) {
-  if (!sessionId || loadingConversation.value) {
+  if (!sessionId) {
     return;
+  }
+  const requestId = ++conversationLoadSeq;
+  chatRunSeq += 1;
+  activeChatAbortController?.abort();
+  conversationActivationPromise = null;
+  if (sending.value) {
+    void fetch("/api/chat/cancel", { method: "POST" });
   }
   loadingConversation.value = true;
   activeView.value = "chat";
   sending.value = false;
   activityEvents.value = [];
+  activeSessionId.value = sessionId;
   try {
-    const response = await fetch(`/api/conversations/${encodeURIComponent(sessionId)}`);
+    const response = await fetch(`/api/conversations/${encodeURIComponent(sessionId)}/preview`);
     if (!response.ok) {
       throw new Error(`Conversation API ${response.status}`);
     }
     const data = await response.json();
-    activeSessionId.value = sessionId;
+    if (requestId !== conversationLoadSeq) {
+      return;
+    }
     chatMessages.value = Array.isArray(data.messages) ? mapMessages(data.messages) : [];
+    applyUsageSnapshot(data.usage);
+    conversationActivationPromise = activateConversation(sessionId, requestId);
+  } catch (err) {
+    if (requestId === conversationLoadSeq) {
+      error.value = err instanceof Error ? err.message : String(err);
+      loadingConversation.value = false;
+      conversationActivationPromise = null;
+    }
+  }
+}
+
+function replaceRecentSessions(updater: (items: SessionSummary[]) => SessionSummary[]) {
+  if (!payload.value) {
+    return;
+  }
+  const current = Array.isArray(payload.value.conversation?.recent)
+    ? payload.value.conversation.recent
+    : [];
+  payload.value = {
+    ...payload.value,
+    conversation: {
+      ...payload.value.conversation,
+      recent: updater(current)
+    }
+  };
+}
+
+async function renameSession(value: { id: string; title: string }) {
+  const sessionId = String(value?.id || "");
+  const title = String(value?.title || "").trim();
+  if (!sessionId || !title) {
+    return;
+  }
+  replaceRecentSessions((items) =>
+    items.map((item) => item.id === sessionId ? { ...item, title } : item)
+  );
+  try {
+    const response = await fetch(`/api/conversations/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title })
+    });
+    const data = await response.json();
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || `Conversation rename API ${response.status}`);
+    }
     await loadDashboard({ bootstrap: false });
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
-  } finally {
+    await loadDashboard({ bootstrap: false });
+  }
+}
+
+async function deleteSession(sessionId: string) {
+  sessionId = String(sessionId || "");
+  if (!sessionId) {
+    return;
+  }
+  const wasActive = activeSessionId.value === sessionId;
+  conversationLoadSeq += 1;
+  chatRunSeq += 1;
+  activeChatAbortController?.abort();
+  if (sending.value) {
+    void fetch("/api/chat/cancel", { method: "POST" });
+  }
+  conversationActivationPromise = null;
+  replaceRecentSessions((items) => items.filter((item) => item.id !== sessionId));
+  if (wasActive) {
+    activeSessionId.value = "";
+    chatMessages.value = [];
+    activityEvents.value = [];
     loadingConversation.value = false;
+  }
+  try {
+    const response = await fetch(`/api/conversations/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE"
+    });
+    const data = await response.json();
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || `Conversation delete API ${response.status}`);
+    }
+    applyUsageSnapshot(data.usage);
+    await loadDashboard({ bootstrap: false });
+    if (wasActive) {
+      const latest = Array.isArray(payload.value?.conversation.recent)
+        ? payload.value.conversation.recent[0]
+        : null;
+      if (latest?.id) {
+        await loadConversation(latest.id);
+      } else {
+        chatMessages.value = [
+          {
+            id: newId(),
+            role: "assistant",
+            text: "这轮会话已经删掉了。哼，空地整理好了，重新说吧。"
+          }
+        ];
+      }
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+    await loadDashboard({ bootstrap: false });
   }
 }
 
@@ -240,11 +386,16 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
     return;
   }
 
+  if (conversationActivationPromise) {
+    await conversationActivationPromise;
+  }
+
   if (text.startsWith("/") && options.appendUser !== false) {
     await runCommandText(text);
     return;
   }
 
+  const chatRequestId = ++chatRunSeq;
   if (options.appendUser !== false) {
     chatMessages.value.push({ id: newId(), role: "user", text });
   }
@@ -297,6 +448,10 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
       if (done) {
         break;
       }
+      if (chatRequestId !== chatRunSeq) {
+        controller.abort();
+        return;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
@@ -308,6 +463,9 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
     }
 
     if (buffer.trim()) {
+      if (chatRequestId !== chatRunSeq) {
+        return;
+      }
       processChatStreamLine(buffer, ensureAssistantMessage, (value) => {
         doneAnswer = value;
       });
@@ -326,6 +484,9 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
     }
     await loadDashboard({ bootstrap: false });
   } catch (err) {
+    if (chatRequestId !== chatRunSeq) {
+      return;
+    }
     if (err instanceof DOMException && err.name === "AbortError") {
       appendSystem("已中断当前处理。");
       upsertActivity("interrupted", {
@@ -348,14 +509,16 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
       status: "error"
     });
   } finally {
-    activeChatAbortController = null;
-    sending.value = false;
-    markAllActivityDone();
-    window.setTimeout(() => {
-      if (!sending.value) {
-        activityEvents.value = [];
-      }
-    }, 1400);
+    if (chatRequestId === chatRunSeq) {
+      activeChatAbortController = null;
+      sending.value = false;
+      markAllActivityDone();
+      window.setTimeout(() => {
+        if (!sending.value && chatRequestId === chatRunSeq) {
+          activityEvents.value = [];
+        }
+      }, 1400);
+    }
   }
 }
 
@@ -534,6 +697,7 @@ async function cancelChat() {
   if (!sending.value) {
     return;
   }
+  chatRunSeq += 1;
   activeChatAbortController?.abort();
   try {
     await fetch("/api/chat/cancel", { method: "POST" });

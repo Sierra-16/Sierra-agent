@@ -68,6 +68,33 @@ class ConversationStore:
         with open(msg_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data.get("messages", []), data.get("usage", {})
+
+    def rename(self, conv_id, title):
+        title = " ".join(str(title or "").split())[:120]
+        if not conv_id or not title:
+            return False
+        index = self._load_index()
+        if conv_id not in index:
+            return False
+        index[conv_id]["title"] = title
+        index[conv_id]["updated"] = datetime.now().timestamp()
+        self._save_index(index)
+        return True
+
+    def delete(self, conv_id):
+        if not conv_id:
+            return False
+        index = self._load_index()
+        existed = conv_id in index
+        if existed:
+            index.pop(conv_id, None)
+            self._save_index(index)
+
+        msg_path = os.path.join(self.storage_dir, f"{conv_id}.json")
+        if os.path.exists(msg_path):
+            os.unlink(msg_path)
+            existed = True
+        return existed
     
     def list_all(self):
         index = self._load_index()

@@ -72,7 +72,9 @@ def main():
         cron_config=config.get("cron", {}),
         checkpoint_config=config.get("checkpoints", {}),
         tools_config=config.get("tools", {}),
+        plugin_config=config.get("plugins", {}),
         auxiliary_config=resolve_auxiliary_config(config),
+        app_config=config,
         workspace=os.getcwd(),
         sierra_dir=SIERRA_DIR,
     )
@@ -167,6 +169,7 @@ def _handle_command(cmd, agent):
 /cron                 list scheduled reminders
 /cron-add <min> <p>   add scheduled reminder
 /cron-remove <id>     remove scheduled reminder
+/plugins             show plugin status
 /skills               list skills
 /skills-reload        reload skills
 /skills-stats         show skill stats
@@ -288,6 +291,9 @@ def _handle_command(cmd, agent):
     if cmd == "/skills":
         _print_skills(agent.skill_summaries(include_unavailable=True))
         return
+    if cmd == "/plugins":
+        _print_plugins(agent.plugin_status())
+        return
     if cmd == "/skills-reload":
         result = agent.reload_skills()
         print(f"reloaded {result['count']} skills")
@@ -303,6 +309,7 @@ def _handle_command(cmd, agent):
             print(format_config_issues(exc.issues))
             return
         agent.reload_auxiliary_config(resolve_auxiliary_config(config))
+        agent.reload_plugins(config.get("plugins", {}), config)
         print("config.json reloaded")
         return
     if cmd == "/skills-stats":
@@ -352,6 +359,20 @@ def _print_skill_stats(stats):
             f"template {item['renders']} · script {item['script_runs']} · "
             f"failed {item['failures']}"
         )
+
+
+def _print_plugins(status):
+    print(f"Plugins: {status.get('loaded', 0)}/{status.get('total', 0)} loaded")
+    for item in status.get("items", []):
+        state = "loaded" if item.get("loaded") else "enabled" if item.get("enabled") else "disabled"
+        if item.get("error"):
+            state = "failed"
+        print(f"  {state} {item.get('id') or item.get('name')} [{item.get('kind', 'plugin')}]")
+        providers = item.get("registered_providers") or []
+        if providers:
+            print("    providers: " + ", ".join(str(provider) for provider in providers))
+        if item.get("error"):
+            print("    error: " + str(item.get("error")))
 
 
 def _confirm_tool_call(request):

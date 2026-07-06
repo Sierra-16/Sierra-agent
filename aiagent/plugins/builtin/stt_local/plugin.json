@@ -1,0 +1,20 @@
+{
+  "id": "stt.local",
+  "name": "Local Speech To Text",
+  "kind": "provider",
+  "version": "0.1.0",
+  "description": "Adds a local speech-to-text provider surface for Sierra.",
+  "module": "aiagent.plugins.builtin.stt_local.provider",
+  "entrypoint": "register",
+  "enabled_by_default": true,
+  "capabilities": ["stt"],
+  "config_schema": {
+    "config_path": "auxiliary.stt",
+    "fields": {
+      "enabled": "boolean",
+      "provider": "local",
+      "model": "local speech model name",
+      "language": "language code or auto"
+    }
+  }
+}

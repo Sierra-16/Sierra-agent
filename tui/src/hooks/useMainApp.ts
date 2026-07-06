@@ -177,7 +177,7 @@ export function useMainApp(gw: Gateway): MainApp {
         case "/help":
           appendMessage({
             role: "system",
-            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /undo [n]  /retry  /model  /mcp  /skills  /skills-reload  /skills-stats  /reload-config  /reset  /compress  /task  /task-cancel  /debug-context  /jobs  /cron  /cron-add <分钟> <提示>  /cron-remove  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
+            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /undo [n]  /retry  /model  /mcp  /plugins  /skills  /skills-reload  /skills-stats  /reload-config  /reset  /compress  /task  /task-cancel  /debug-context  /jobs  /cron  /cron-add <分钟> <提示>  /cron-remove  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
           });
           break;
         case "/new":
@@ -305,6 +305,7 @@ export function useMainApp(gw: Gateway): MainApp {
           break;
         case "/audit": gw.send({ cmd: "audit" }); break;
         case "/mcp": gw.send({ cmd: "mcp" }); break;
+        case "/plugins": gw.send({ cmd: "plugins" }); break;
         case "/skills": gw.send({ cmd: "skills" }); break;
         case "/skills-reload":
           setBusy(true);

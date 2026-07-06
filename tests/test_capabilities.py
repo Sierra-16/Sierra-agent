@@ -72,6 +72,22 @@ class CapabilityRegistryTests(unittest.TestCase):
                 "providers": [{"name": "markdown", "available": True}],
             },
             skill_summaries=[{"name": "project-context"}],
+            plugin_status={
+                "total": 2,
+                "enabled": 2,
+                "loaded": 2,
+                "failed": 0,
+                "providers": {
+                    "items": [
+                        {
+                            "kind": "image_generation",
+                            "name": "openai_compatible",
+                            "active": True,
+                            "enabled": True,
+                        }
+                    ]
+                },
+            },
             cron_status={"enabled": True, "tasks": [{"id": "cron-1"}]},
             background_status={"enabled": True, "pending_count": 1, "running_count": 0, "failed_count": 0},
         )
@@ -84,6 +100,8 @@ class CapabilityRegistryTests(unittest.TestCase):
         self.assertNotIn("vision-secret", str(payload))
         self.assertEqual(payload["by_name"]["tools"]["metadata"]["total"], 3)
         self.assertEqual(payload["by_name"]["mcp"]["status"], "ready")
+        self.assertEqual(payload["by_name"]["plugins"]["status"], "ready")
+        self.assertEqual(payload["by_name"]["plugins"]["metadata"]["active_providers"], 1)
         self.assertGreaterEqual(payload["summary"]["ready"], 1)
 
     def test_prompt_context_keeps_vision_instruction_current(self):

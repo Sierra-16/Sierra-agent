@@ -327,6 +327,70 @@
                 />
               </section>
 
+              <section v-else-if="activeSection === 'plugins'" class="settings-section">
+                <div class="settings-page-toolbar">
+                  <div>
+                    <span>Extensions</span>
+                    <h3>插件系统</h3>
+                    <p>查看 Sierra 已发现的插件、运行时 provider 和加载状态。插件负责把新的工具、模型后端、语音、图像生成等能力接入 Sierra。</p>
+                  </div>
+                  <div class="settings-actions">
+                    <button type="button" @click="$emit('refresh')">刷新</button>
+                  </div>
+                </div>
+
+                <div class="settings-kpi-grid">
+                  <ListRow title="插件总数" :description="String(pluginStatus.total || 0)" :meta="`${pluginStatus.loaded || 0} 已加载`" />
+                  <ListRow title="Provider" :description="String(pluginProviders.length)" :meta="`${activePluginProviders.length} 当前启用`" />
+                  <ListRow title="加载失败" :description="String(pluginStatus.failed || 0)" :meta="pluginStatus.failed ? '需要检查' : '正常'" />
+                </div>
+
+                <div v-if="pluginProviders.length" class="tool-diagnostic-grid">
+                  <article v-for="provider in pluginProviders" :key="`${provider.kind}:${provider.name}`">
+                    <span>{{ provider.kind }}</span>
+                    <strong>{{ provider.title || provider.name }}</strong>
+                    <small>{{ pluginProviderDescription(provider) }}</small>
+                  </article>
+                </div>
+
+                <div class="tool-catalog">
+                  <article
+                    v-for="plugin in pluginItems"
+                    :key="plugin.id"
+                    class="tool-card"
+                    :class="plugin.error ? 'risk-high' : plugin.loaded ? 'risk-low' : 'risk-medium'"
+                  >
+                    <div class="tool-card-main">
+                      <span class="tool-card-icon">{{ plugin.loaded ? '✦' : plugin.enabled ? '◇' : '·' }}</span>
+                      <span>
+                        <strong>{{ plugin.name || plugin.id }}</strong>
+                        <small>{{ plugin.description || plugin.id }}</small>
+                      </span>
+                    </div>
+                    <div class="tool-card-meta">
+                      <b>{{ plugin.kind || "plugin" }}</b>
+                      <b>{{ plugin.version || "0.1.0" }}</b>
+                      <b>{{ plugin.builtin ? "built-in" : "local" }}</b>
+                      <b>{{ plugin.loaded ? "loaded" : plugin.enabled ? "enabled" : "disabled" }}</b>
+                    </div>
+                    <p v-if="plugin.registered_providers?.length" class="tool-risk-reason">
+                      Providers: {{ plugin.registered_providers.join(", ") }}
+                    </p>
+                    <p v-if="plugin.registered_tools?.length" class="tool-risk-reason">
+                      Tools: {{ plugin.registered_tools.join(", ") }}
+                    </p>
+                    <p v-if="plugin.error" class="tool-risk-reason">{{ plugin.error }}</p>
+                  </article>
+                  <ListRow v-if="!pluginItems.length" title="还没有发现插件" description="在 plugins/ 目录放入 plugin.json 后会显示在这里。" />
+                </div>
+
+                <PanelResult
+                  v-if="pluginErrors.length"
+                  title="插件发现错误"
+                  :text="pluginErrorText"
+                />
+              </section>
+
               <section v-else-if="activeSection === 'mcp'" class="settings-section">
                 <div class="settings-page-toolbar">
                   <div>
@@ -761,6 +825,7 @@ import type { DashboardPayload } from "../types";
 type SettingsSection =
   | "model"
   | "skills"
+  | "plugins"
   | "mcp"
   | "tools"
   | "safety"
@@ -891,6 +956,14 @@ const sections: SettingsSectionMeta[] = [
     icon: WandSparkles
   },
   {
+    id: "plugins",
+    label: "Plugins",
+    subtitle: "运行时扩展",
+    description: "查看 Sierra 的 manifest 插件、provider 注册情况和加载错误。",
+    group: "能力扩展",
+    icon: Settings2
+  },
+  {
     id: "mcp",
     label: "MCP",
     subtitle: "外部工具接入",
@@ -982,6 +1055,19 @@ const models = computed(() => Array.isArray(props.payload?.identity.models) ? pr
 const skills = computed(() => Array.isArray(props.payload?.skills?.items) ? props.payload?.skills?.items : []);
 const skillErrors = computed(() => Array.isArray(props.payload?.skills?.errors) ? props.payload?.skills?.errors : []);
 const skillOfferedCount = computed(() => skills.value.filter((skill: any) => skill.offered).length);
+const pluginStatus = computed(() => props.payload?.plugins || {});
+const pluginItems = computed(() => Array.isArray(pluginStatus.value?.items) ? pluginStatus.value.items : []);
+const pluginProviders = computed(() => {
+  const providers = pluginStatus.value?.providers?.items;
+  return Array.isArray(providers) ? providers : [];
+});
+const activePluginProviders = computed(() => pluginProviders.value.filter((provider: any) => provider.active && provider.enabled));
+const pluginErrors = computed(() => Array.isArray(pluginStatus.value?.errors) ? pluginStatus.value.errors : []);
+const pluginErrorText = computed(() => {
+  return pluginErrors.value
+    .map((item: any) => `${item?.path || "plugin"}: ${item?.error || item}`)
+    .join("\n");
+});
 const skillEditorTitle = computed(() => {
   if (skillEditorMode.value === "create") {
     return skillCreateName.value || "未命名 Skill";
@@ -1918,6 +2004,16 @@ function toolExposureLabel(exposure: any) {
     return "检索桥接";
   }
   return "直接可见";
+}
+
+function pluginProviderDescription(provider: any) {
+  const status = provider?.enabled ? "enabled" : provider?.active ? "selected" : "installed";
+  const availability = provider?.available === false ? "needs config" : "ready";
+  const model = provider?.model ? ` · ${provider.model}` : "";
+  const issueText = Array.isArray(provider?.issues) && provider.issues.length
+    ? ` · ${provider.issues.join(", ")}`
+    : "";
+  return `${status} · ${availability}${model}${issueText}`;
 }
 
 function memoryResultKey(item: any) {
