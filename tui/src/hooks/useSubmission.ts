@@ -6,7 +6,7 @@ import { useCallback, type MutableRefObject } from "react";
 import type { Gateway } from "../gateway.js";
 import type { ComposerActions, ComposerRefs } from "./useComposerState.js";
 import type { Message } from "./useMainApp.js";
-import { COMMANDS } from "../components/Composer.js";
+import { filterCommandHints, type CommandDefinition } from "../commands.js";
 
 interface UseSubmissionOptions {
   composerActions: ComposerActions;
@@ -19,6 +19,7 @@ interface UseSubmissionOptions {
   busy: boolean;
   handleCommand: (cmd: string) => void;
   hintIdx: number;
+  commands: CommandDefinition[];
 }
 
 export function useSubmission(opts: UseSubmissionOptions) {
@@ -32,6 +33,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
     busy,
     handleCommand,
     hintIdx,
+    commands,
   } = opts;
 
   /** Send text to the backend as a chat message. */
@@ -75,7 +77,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
 
       // Autocomplete partial slash commands
       if (text.startsWith("/") && !text.includes(" ")) {
-        const matches = COMMANDS.filter((c) => c.cmd.startsWith(text));
+        const matches = filterCommandHints(text, commands);
         if (matches.length > 0) {
           const selectedIdx = Math.min(hintIdx, matches.length - 1);
           const selected = matches[selectedIdx];
@@ -102,7 +104,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
 
       dispatchSubmission(value);
     },
-    [composerActions, dispatchSubmission, hintIdx]
+    [commands, composerActions, dispatchSubmission, hintIdx]
   );
 
   // Update the submitRef so useComposerState always exposes the latest submit

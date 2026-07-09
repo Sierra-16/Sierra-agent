@@ -19,11 +19,12 @@ import { UserInputPrompt } from "./UserInputPrompt.js";
 import { TaskProgress } from "./TaskProgress.js";
 import { TaskRecoveryPrompt } from "./TaskRecoveryPrompt.js";
 import { CronRemovePicker } from "./CronRemovePicker.js";
+import type { CommandDefinition } from "../commands.js";
 
 interface AppLayoutProps {
   app: MainApp;
   theme: Theme;
-  hints: { cmd: string; desc: string }[];
+  hints: CommandDefinition[];
   hintIdx: number;
   onSubmit: (value: string) => void;
 }

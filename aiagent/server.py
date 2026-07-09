@@ -18,6 +18,7 @@ from .config_validation import (
     validate_model_config,
 )
 from .auxiliary_config import resolve_auxiliary_config
+from .commands import command_catalog, normalize_command_name
 from .gateway import GatewayRuntime
 from .safety import sanitize_arguments
 
@@ -46,7 +47,7 @@ def run_server(
         except json.JSONDecodeError:
             continue
 
-        cmd = msg.get("cmd", "chat")
+        cmd = _server_command_name(msg.get("cmd", "chat"))
 
         if cmd == "init":
             convs = current_agent.list_conversations()
@@ -62,6 +63,13 @@ def run_server(
                 "usage": _usage_payload(current_agent),
                 "task": _agent_task_status(current_agent),
                 "recovery_task": _agent_task_recovery(current_agent),
+                "commands": _tui_command_catalog(),
+            }, ensure_ascii=False))
+
+        elif cmd == "commands_catalog":
+            stdout(json.dumps({
+                "type": "commands_catalog",
+                "commands": _tui_command_catalog(),
             }, ensure_ascii=False))
 
         elif cmd == "chat":
@@ -753,6 +761,29 @@ def run_server(
 def stdout(s: str):
     sys.stdout.write(s + "\n")
     sys.stdout.flush()
+
+
+def _server_command_name(value) -> str:
+    command = normalize_command_name(str(value or "chat")).replace("-", "_")
+    aliases = {
+        "model": "models",
+        "task_cancel": "task_abandon",
+    }
+    return aliases.get(command, command)
+
+
+def _tui_command_catalog() -> list[dict]:
+    commands = []
+    for item in command_catalog():
+        commands.append({
+            "cmd": item.get("label", ""),
+            "desc": item.get("description", ""),
+            "category": item.get("category", ""),
+            "aliases": item.get("aliases", []),
+            "argsHint": item.get("args_hint", ""),
+            "requiresArg": bool(item.get("requires_argument")),
+        })
+    return commands
 
 
 def _auto_save(agent: Agent):

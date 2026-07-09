@@ -10,6 +10,13 @@ import { useSubmission } from "./useSubmission.js";
 import { useInputHandlers } from "./useInputHandlers.js";
 import type { ModelOption } from "../components/ModelPicker.js";
 import type { CronTaskOption } from "../gateway.js";
+import {
+  FALLBACK_COMMANDS,
+  formatCommandHelp,
+  normalizeCommandCatalog,
+  resolveSlashCommand,
+  type CommandDefinition,
+} from "../commands.js";
 
 export interface Message {
   role: "user" | "assistant" | "system" | "error";
@@ -71,6 +78,7 @@ export interface MainApp {
   lastQuery: string;
   cols: number;
   composer: { actions: ComposerActions; refs: ComposerRefs; state: ComposerState };
+  commands: CommandDefinition[];
   hintIdx: number;
   setHintIdx: (v: number | ((prev: number) => number)) => void;
   modelPicker: {
@@ -124,6 +132,7 @@ export function useMainApp(gw: Gateway): MainApp {
   const [started, setStarted] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [lastQuery, setLastQuery] = useState("");
+  const [commands, setCommands] = useState<CommandDefinition[]>(FALLBACK_COMMANDS);
   const [hintIdx, setHintIdx] = useState(0);
   const [cols, setCols] = useState(process.stdout.columns || 80);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -170,14 +179,15 @@ export function useMainApp(gw: Gateway): MainApp {
 
   const handleCommand = useCallback(
     (cmd: string) => {
-      const [command, ...args] = cmd.trim().split(/\s+/);
+      const [rawCommand, ...args] = cmd.trim().split(/\s+/);
+      const command = resolveSlashCommand(rawCommand || "", commands);
       const argument = args.join(" ").trim();
       switch (command) {
         case "/quit": case "/exit": gw.stop(); break;
         case "/help":
           appendMessage({
             role: "system",
-            text: "命令: /help  /quit  /new  /list  /sessions  /session-search <关键词>  /session-load <id>  /undo [n]  /retry  /model  /mcp  /plugins  /skills  /skills-reload  /skills-stats  /reload-config  /reset  /compress  /task  /task-cancel  /debug-context  /jobs  /cron  /cron-add <分钟> <提示>  /cron-remove  /memory  /memory-search <问题>  /memory-forget <ID>  /memory-clear  /audit",
+            text: formatCommandHelp(commands),
           });
           break;
         case "/new":
@@ -329,7 +339,7 @@ export function useMainApp(gw: Gateway): MainApp {
         default: appendMessage({ role: "system", text: `未知命令: ${cmd}` });
       }
     },
-    [appendMessage, gw, resetLiveOutput, taskPlan]
+    [appendMessage, commands, gw, resetLiveOutput, taskPlan]
   );
 
   const closeModelPicker = useCallback(() => {
@@ -467,6 +477,7 @@ export function useMainApp(gw: Gateway): MainApp {
     busy,
     handleCommand,
     hintIdx,
+    commands,
   });
 
   useInputHandlers({
@@ -495,6 +506,7 @@ export function useMainApp(gw: Gateway): MainApp {
     pendingTaskRecovery,
     moveTaskRecoverySelection,
     confirmTaskRecovery,
+    commands,
   } as any);
 
   // Gateway events
@@ -505,6 +517,7 @@ export function useMainApp(gw: Gateway): MainApp {
           setModel(ev.model || "");
           setCwd(ev.cwd || "");
           setStarted(true);
+          if (ev.commands) setCommands(normalizeCommandCatalog(ev.commands));
           if (ev.usage) setUsage(ev.usage);
           if (ev.task !== undefined) setTaskPlan(ev.task || null);
           if (ev.cron_due?.length) {
@@ -519,6 +532,9 @@ export function useMainApp(gw: Gateway): MainApp {
             setBusy(true);
           }
           if (ev.recent?.id) gw.send({ cmd: "resume", id: ev.recent.id });
+          break;
+        case "commands_catalog":
+          if (ev.commands) setCommands(normalizeCommandCatalog(ev.commands));
           break;
         case "resumed":
           if (ev.title) setLastQuery(ev.title);
@@ -971,7 +987,7 @@ export function useMainApp(gw: Gateway): MainApp {
     messages, streamingText, toolEvents, pendingToolApproval, pendingUserInput, userInputSelectedIndex,
     taskPlan, pendingTaskRecovery, taskRecoverySelectedIndex,
     busy, model, cwd, usage, started, statusText, lastQuery, cols,
-    composer, hintIdx, setHintIdx,
+    composer, commands, hintIdx, setHintIdx,
     modelPicker: {
       open: modelPickerOpen,
       loading: modelPickerLoading,

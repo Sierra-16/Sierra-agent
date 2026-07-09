@@ -9,7 +9,7 @@ import { useRef } from "react";
 import type { Gateway } from "../gateway.js";
 import type { TaskPlan } from "../gateway.js";
 import type { ComposerActions, ComposerRefs, ComposerState } from "./useComposerState.js";
-import { COMMANDS } from "../components/Composer.js";
+import { filterCommandHints, type CommandDefinition } from "../commands.js";
 import type {
   ToolApprovalDecision,
   ToolApprovalRequest,
@@ -42,6 +42,7 @@ interface UseInputHandlersOptions {
   pendingTaskRecovery: TaskPlan | null;
   moveTaskRecoverySelection: (delta: number) => void;
   confirmTaskRecovery: () => void;
+  commands: CommandDefinition[];
 }
 
 export function useInputHandlers(opts: UseInputHandlersOptions) {
@@ -69,6 +70,7 @@ export function useInputHandlers(opts: UseInputHandlersOptions) {
     pendingTaskRecovery,
     moveTaskRecoverySelection,
     confirmTaskRecovery,
+    commands,
   } = opts;
 
   const hintIdxRef = useRef(hintIdx);
@@ -188,7 +190,7 @@ export function useInputHandlers(opts: UseInputHandlersOptions) {
     const hints =
       composerState.input.startsWith("/") &&
       !composerState.input.includes(" ")
-        ? COMMANDS.filter((c) => c.cmd.startsWith(composerState.input))
+        ? filterCommandHints(composerState.input, commands)
         : [];
 
     if (hints.length > 0) {

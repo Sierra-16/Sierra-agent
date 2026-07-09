@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import type { CommandDefinition } from "./commands.js";
 
 export interface TaskStep {
   id: string;
@@ -100,6 +101,7 @@ export interface ServerEvent {
     title?: string;
   }[];
   models?: { key: string; name: string; active?: boolean }[];
+  commands?: CommandDefinition[];
   skills?: SkillSummary[];
   errors?: string[];
   reloaded?: boolean;

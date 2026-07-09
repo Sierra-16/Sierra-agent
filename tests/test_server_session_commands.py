@@ -108,6 +108,25 @@ def run_commands(agent, messages):
 
 
 class ServerSessionCommandTests(unittest.TestCase):
+    def test_init_includes_command_catalog(self):
+        agent = FakeSessionAgent()
+
+        events = run_commands(agent, [{"cmd": "init"}])
+
+        self.assertEqual(events[0]["type"], "init")
+        commands = events[0]["commands"]
+        self.assertIn("/memory-search", [item["cmd"] for item in commands])
+        memory_search = next(item for item in commands if item["cmd"] == "/memory-search")
+        self.assertTrue(memory_search["requiresArg"])
+
+    def test_command_alias_is_normalized(self):
+        agent = FakeSessionAgent()
+
+        events = run_commands(agent, [{"cmd": "list"}])
+
+        self.assertEqual(events[0]["type"], "sessions")
+        self.assertIn("s1", events[0]["text"])
+
     def test_sessions_and_search_commands_return_text(self):
         agent = FakeSessionAgent()
 

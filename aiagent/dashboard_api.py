@@ -28,6 +28,7 @@ from .config_validation import (
 )
 from .auxiliary_config import auxiliary_status
 from .capabilities import CapabilityRegistry
+from .commands import command_catalog, command_help_text, complete_commands, normalize_command_name
 from .gateway import GatewayRuntime, sanitize_gateway_event
 from .safety import SafetyGate, sanitize_text
 from .skills.loader import SkillLoader
@@ -172,6 +173,20 @@ def create_dashboard_app(
         return {
             "ok": True,
             **_capabilities(app.state.gateway.agent),
+        }
+
+    @app.get("/api/commands/catalog")
+    def commands_catalog() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "items": command_catalog(),
+        }
+
+    @app.get("/api/commands/complete")
+    def commands_complete(q: str = "", limit: int = 20) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "items": complete_commands(q, limit),
         }
 
     @app.get("/api/plugins")
@@ -903,7 +918,7 @@ def _normalize_command_request(request: CommandRequest) -> tuple[str, str]:
     command = (request.command.strip().lstrip("/") or command).strip()
     if request.command.strip().startswith("/"):
         command = request.command.strip().lstrip("/").split(maxsplit=1)[0]
-    command = command.replace("-", "_")
+    command = normalize_command_name(command).replace("-", "_")
     return command.lower(), argument.strip()
 
 
@@ -1832,6 +1847,10 @@ def _format_help() -> str:
     ])
 
 
+def _format_help() -> str:
+    return command_help_text()
+
+
 def _format_memory_status(status: dict[str, Any]) -> str:
     lines = ["记忆状态"]
     curated = str(status.get("curated") or "").strip()
@@ -2376,7 +2395,8 @@ def _conversation(agent: Any) -> dict[str, Any]:
         "id": getattr(agent, "conv_id", None),
         "message_count": len(messages),
         "role_counts": role_counts,
-        "recent": conversations[:8],
+        "recent": conversations,
+        "total": len(conversations),
     }
 
 

@@ -631,6 +631,42 @@ class DashboardApiTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertIn("/model", payload["text"])
 
+    def test_command_catalog_and_completion_are_registry_backed(self):
+        app = create_dashboard_app(
+            FakeAgent(),
+            config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+            sierra_dir=".",
+            static_dir="missing-dist",
+        )
+        client = TestClient(app)
+
+        catalog = client.get("/api/commands/catalog")
+        completion = client.get("/api/commands/complete", params={"q": "/mem", "limit": 5})
+
+        self.assertEqual(catalog.status_code, 200)
+        catalog_items = catalog.json()["items"]
+        self.assertTrue(any(item["label"] == "/memory-search" for item in catalog_items))
+        self.assertEqual(completion.status_code, 200)
+        labels = [item["label"] for item in completion.json()["items"]]
+        self.assertIn("/memory", labels)
+        self.assertIn("/memory-search", labels)
+
+    def test_command_endpoint_resolves_registry_aliases(self):
+        app = create_dashboard_app(
+            FakeAgent(),
+            config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+            sierra_dir=".",
+            static_dir="missing-dist",
+        )
+        client = TestClient(app)
+
+        response = client.post("/api/command", json={"command": "/list", "text": "/list"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["type"], "sessions")
+
     def test_command_endpoint_searches_memory(self):
         app = create_dashboard_app(
             FakeAgent(),

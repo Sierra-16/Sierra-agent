@@ -365,11 +365,16 @@ input:focus-visible {
 
 .session-stack {
   display: grid;
+  flex: 1 1 auto;
+  align-content: start;
   gap: 5px;
   min-height: 0;
   margin-top: 16px;
+  padding-right: 2px;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   scrollbar-color: rgba(110, 141, 103, 0.72) transparent;
 }
 

@@ -425,6 +425,7 @@ type CompletionItem = {
   label: string;
   detail: string;
   value: string;
+  requiresArgument?: boolean;
 };
 
 type MessageAttachment = {
@@ -480,7 +481,7 @@ const INTERACTIVE_SELECTOR = [
   ".draft-attachment"
 ].join(",");
 
-const slashCommands: CompletionItem[] = [
+const fallbackSlashCommands: CompletionItem[] = [
   { kind: "command", label: "/help", detail: "查看 Web 可用命令", value: "/help " },
   { kind: "command", label: "/new", detail: "开启一个新对话", value: "/new" },
   { kind: "command", label: "/sessions", detail: "查看历史会话", value: "/sessions" },
@@ -509,6 +510,7 @@ const slashCommands: CompletionItem[] = [
   { kind: "command", label: "/debug-context", detail: "查看上下文结构", value: "/debug-context" },
   { kind: "command", label: "/audit", detail: "查看工具审计日志", value: "/audit" }
 ];
+const slashCommands = ref<CompletionItem[]>(fallbackSlashCommands);
 
 const draft = ref("");
 const freeText = ref<Record<string, string>>({});
@@ -530,6 +532,7 @@ const inputHistory = ref<string[]>([]);
 const historyIndex = ref(-1);
 const previewImage = ref<MessageAttachment | null>(null);
 let referenceRequestId = 0;
+let slashRequestId = 0;
 let gsapContext: ReturnType<typeof gsap.context> | undefined;
 let lastAnimatedMessageId = "";
 
@@ -1014,6 +1017,9 @@ function applyCompletion(item: CompletionItem) {
 }
 
 function commandNeedsArgument(item: CompletionItem) {
+  if (item.requiresArgument) {
+    return true;
+  }
   return [
     "/session-search",
     "/session-load",
@@ -1157,6 +1163,60 @@ function onDraftInput() {
   updateCompletion();
 }
 
+function mapCommandCompletion(item: any): CompletionItem | null {
+  const label = String(item?.label || item?.value || "");
+  const value = String(item?.value || label);
+  if (!label || !value) {
+    return null;
+  }
+  return {
+    kind: "command",
+    label,
+    detail: String(item?.detail || item?.description || ""),
+    value,
+    requiresArgument: Boolean(item?.requires_argument || item?.requiresArgument)
+  };
+}
+
+async function loadSlashCommands() {
+  try {
+    const response = await fetch("/api/commands/catalog");
+    const data = await response.json();
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || `Command catalog API ${response.status}`);
+    }
+    const items = Array.isArray(data.items)
+      ? data.items.map(mapCommandCompletion).filter(Boolean) as CompletionItem[]
+      : [];
+    if (items.length) {
+      slashCommands.value = items;
+    }
+  } catch {
+    slashCommands.value = fallbackSlashCommands;
+  }
+}
+
+async function fetchSlashSuggestions(query: string) {
+  const requestId = ++slashRequestId;
+  try {
+    const response = await fetch(`/api/commands/complete?q=${encodeURIComponent(query)}&limit=18`);
+    const data = await response.json();
+    if (requestId !== slashRequestId || !response.ok || data.ok === false) {
+      return;
+    }
+    const items = Array.isArray(data.items)
+      ? data.items.map(mapCommandCompletion).filter(Boolean) as CompletionItem[]
+      : [];
+    if (items.length || query.trim()) {
+      completionItems.value = items;
+      selectedCompletionIndex.value = 0;
+      completionOpen.value = items.length > 0;
+    }
+  } catch {
+    // Local fallback already filled the popover.
+  }
+}
+
 function updateCompletion() {
   const textarea = textareaRef.value;
   const cursor = textarea?.selectionStart ?? draft.value.length;
@@ -1168,11 +1228,12 @@ function updateCompletion() {
     completionMode.value = "slash";
     completionTokenStart.value = cursor - slash[2].length;
     const query = slash[2].toLowerCase();
-    completionItems.value = slashCommands
+    completionItems.value = slashCommands.value
       .filter((item) => item.label.toLowerCase().startsWith(query))
       .slice(0, 12);
     selectedCompletionIndex.value = 0;
     completionOpen.value = completionItems.value.length > 0;
+    fetchSlashSuggestions(query);
     return;
   }
 
@@ -1187,6 +1248,7 @@ function updateCompletion() {
   }
 
   referenceRequestId += 1;
+  slashRequestId += 1;
   referenceLoading.value = false;
   completionOpen.value = false;
 }
@@ -1619,6 +1681,7 @@ async function scrollToBottom() {
 }
 
 onMounted(() => {
+  loadSlashCommands();
   loadComposerState();
   setupMotion();
   animateLatestMessage();
