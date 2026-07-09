@@ -21,6 +21,7 @@ export type NavItem = {
 export type DashboardPayload = {
   generated_at: string;
   identity: Record<string, any>;
+  mode: Record<string, any>;
   usage: Record<string, any>;
   conversation: Record<string, any>;
   tools: Record<string, any>;

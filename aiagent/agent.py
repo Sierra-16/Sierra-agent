@@ -43,9 +43,41 @@ from .token_utils import estimate_tokens
 from .auxiliary_config import auxiliary_status
 from .capabilities import CapabilityRegistry
 from .plugins import PluginManager
+from .todo import TodoStore
 
 
 logger = logging.getLogger(__name__)
+
+
+PLAN_MODE_ALLOWED_TOOLS = {
+    "calculator",
+    "get_time",
+    "list_directory",
+    "file_info",
+    "read_file",
+    "read_document",
+    "search_files",
+    "web_fetch",
+    "web_search",
+    "web_extract",
+    "browser_fetch",
+    "browser_snapshot",
+    "git_inspect",
+    "project_inspect",
+    "tool_search",
+    "tool_describe",
+    "skills_list",
+    "skill_view",
+    "skill_render_template",
+    "skill_usage_stats",
+    "session_search",
+    "request_user_input",
+    "todo",
+    "update_plan",
+    "get_plan",
+    "cron_list",
+    "vision_analyze",
+}
 
 
 def _resolve_prompt_budget(
@@ -126,6 +158,8 @@ class Agent:
         self.llm = LLMClient(base_url, api_key, model=model, max_tokens=max_tokens, temperature=temperature)
         self.model = model
         self.tools = registry
+        self.todo_store = TodoStore()
+        self.plan_mode_enabled = False
         self.capabilities = None
         configure_tools = getattr(self.tools, "configure_tools", None)
         if callable(configure_tools):
@@ -428,6 +462,57 @@ class Agent:
             handler=self._cron_remove_tool,
             toolset="cron",
         )
+        self.tools.register(
+            name="todo",
+            description=(
+                "Manage Sierra's lightweight task list for the current session. "
+                "Use it for complex requests with 3+ steps, multiple user tasks, "
+                "or long work where you need to track progress without asking the user to repeat context. "
+                "Call with no arguments to read the list. To write, provide todos=[{id, content, status}] "
+                "where status is pending, in_progress, completed, or cancelled. "
+                "Use merge=true to update by id; otherwise replace the list. "
+                "Keep only one item in_progress and mark items completed as soon as they are done."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "description": "Task items to write. Omit to read current list.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "Short stable id such as '1' or 'inspect-code'.",
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "Task description.",
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": [
+                                        "pending",
+                                        "in_progress",
+                                        "completed",
+                                        "cancelled",
+                                    ],
+                                },
+                            },
+                            "required": ["id", "content", "status"],
+                        },
+                    },
+                    "merge": {
+                        "type": "boolean",
+                        "description": "true updates by id and appends new items; false replaces the whole list.",
+                        "default": False,
+                    },
+                },
+            },
+            handler=self._todo_tool,
+            toolset="planning",
+        )
         self.refresh_capabilities()
         self.system_prompt = self._build_system_prompt()
         self.messages = []
@@ -502,6 +587,7 @@ class Agent:
             self.last_context_files = None
         extra_parts = [
             f"Current model: {self.model}",
+            self._plan_mode_prompt_context(),
             self._auxiliary_prompt_context(),
             (
                 "# Path Context\n"
@@ -516,6 +602,10 @@ class Agent:
             extra_parts.append(context_file_text)
         if memory_text:
             extra_parts.append(memory_text)
+        todo_store = getattr(self, "todo_store", None)
+        todo_context = todo_store.format_for_prompt() if todo_store is not None else ""
+        if todo_context:
+            extra_parts.append(todo_context)
         skills_prompt = self.skill_index.build(
             self.skills,
             available_tools=self._available_tool_names(),
@@ -528,6 +618,17 @@ class Agent:
     def _auxiliary_prompt_context(self):
         capabilities = self.refresh_capabilities()
         return capabilities.prompt_context()
+
+    def _plan_mode_prompt_context(self):
+        if not getattr(self, "plan_mode_enabled", False):
+            return ""
+        return (
+            "# Execution Mode: Plan Mode\n"
+            "- Plan Mode is enabled. You are planning, inspecting, and clarifying only.\n"
+            "- You may use read-only/search/context/planning tools, update todo/update_plan, and ask the user for input.\n"
+            "- Do not write, patch, delete, move, rename, run terminal/code, change memory/config/cron, or call unknown MCP/plugin tools.\n"
+            "- If implementation is needed, produce a concrete plan and ask the user to turn off Plan Mode before executing."
+        )
 
     def refresh_system_prompt(self):
         self.system_prompt = self._build_system_prompt()
@@ -542,6 +643,39 @@ class Agent:
         self.refresh_capabilities()
         self.refresh_system_prompt()
         return self.auxiliary_status()
+
+    def set_plan_mode(self, enabled: bool):
+        self.plan_mode_enabled = bool(enabled)
+        self.refresh_system_prompt()
+        return self.plan_mode_status()
+
+    def plan_mode_status(self):
+        enabled = bool(getattr(self, "plan_mode_enabled", False))
+        return {
+            "enabled": enabled,
+            "mode": "plan" if enabled else "normal",
+            "label": "Plan Mode" if enabled else "Normal Mode",
+            "description": (
+                "只规划和读取信息，不执行写入、删除、终端、配置修改等动作。"
+                if enabled
+                else "按当前权限策略正常执行工具。"
+            ),
+            "allowed_tools": sorted(PLAN_MODE_ALLOWED_TOOLS),
+        }
+
+    def plan_mode_allows_tool(self, name, arguments=None):
+        if not getattr(self, "plan_mode_enabled", False):
+            return True, ""
+        normalized = str(name or "").strip().replace("-", "_")
+        if normalized in PLAN_MODE_ALLOWED_TOOLS:
+            return True, ""
+        return (
+            False,
+            (
+                "Plan Mode 已开启，Sierra 现在只能规划、读取和搜索。"
+                f"工具 {normalized} 可能修改环境或执行动作，已被拦截。"
+            ),
+        )
 
     def reload_plugins(self, plugin_config=None, app_config=None):
         if isinstance(plugin_config, dict):
@@ -634,6 +768,9 @@ class Agent:
 
     def _skill_usage_stats_tool(self, limit=20):
         return json.dumps(self.skill_usage_stats(limit=limit), ensure_ascii=False)
+
+    def _todo_tool(self, todos=None, merge=False):
+        return self.todo_store.tool(todos=todos, merge=merge)
 
     def cron_status(self):
         if self.cron is None:
@@ -1147,6 +1284,9 @@ class Agent:
             task_manager.pause_active()
             task_manager.bind_conversation(None)
         self.messages = []
+        todo_store = getattr(self, "todo_store", None)
+        if todo_store is not None:
+            todo_store.clear()
         self._turns_since_memory_review = 0
         self.current_context_tokens = 0
         self.context_tokens_estimated = False
@@ -1191,6 +1331,9 @@ class Agent:
 
     def load_conversation(self, conv_id):
         self.conv_id = conv_id
+        todo_store = getattr(self, "todo_store", None)
+        if todo_store is not None:
+            todo_store.clear()
         self.messages, usage = self.store.load(conv_id)
         if not self.messages and self.session_db is not None:
             try:
@@ -1250,6 +1393,9 @@ class Agent:
         if self.conv_id == conv_id:
             self.messages = []
             self.conv_id = None
+            todo_store = getattr(self, "todo_store", None)
+            if todo_store is not None:
+                todo_store.clear()
             if self.task_manager is not None:
                 self.task_manager.bind_conversation(None)
             self.refresh_context_estimate()
@@ -1302,6 +1448,9 @@ class Agent:
         if not session:
             return {"ok": False, "error": f"unknown session: {session_id}"}
         self.conv_id = session_id
+        todo_store = getattr(self, "todo_store", None)
+        if todo_store is not None:
+            todo_store.clear()
         self.messages = self.session_db.get_messages(session_id)
         if self.task_manager is not None:
             self.task_manager.bind_conversation(session_id)

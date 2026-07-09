@@ -7,6 +7,17 @@
       </button>
 
       <div class="runtime-strip">
+        <button
+          class="plan-mode-toggle"
+          :class="{ active: planMode }"
+          type="button"
+          :disabled="sending || loading || planModeLoading"
+          :title="planMode ? 'Plan Mode 已开启：只规划和读取' : '开启 Plan Mode：先规划，不执行写入动作'"
+          @click="$emit('toggle-plan-mode')"
+        >
+          <ScrollText :size="14" />
+          <span>{{ planMode ? "计划中" : "计划" }}</span>
+        </button>
         <span class="model-chip" :title="activeModelLabel">{{ activeModelLabel }}</span>
         <span
           class="usage-orb"
@@ -449,6 +460,8 @@ const props = defineProps<{
   error: string;
   loading: boolean;
   messages: ChatMessage[];
+  planMode: boolean;
+  planModeLoading: boolean;
   sending: boolean;
   usagePercent: number;
   workspace?: string;
@@ -458,6 +471,7 @@ const emit = defineEmits<{
   (event: "refresh"): void;
   (event: "send", value: string): void;
   (event: "cancel-chat"): void;
+  (event: "toggle-plan-mode"): void;
   (event: "approve-tool", id: string, decision: "once" | "session" | "deny"): void;
   (
     event: "respond-user-input",
@@ -475,6 +489,7 @@ const INTERACTIVE_SELECTOR = [
   ".send-button",
   ".stop-button",
   ".connection-chip",
+  ".plan-mode-toggle",
   ".completion-item",
   ".approval-button",
   ".message-attachment",

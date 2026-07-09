@@ -25,6 +25,8 @@
           :error="error"
           :loading="loading"
           :messages="chatMessages"
+          :plan-mode="planMode"
+          :plan-mode-loading="planModeLoading"
           :sending="sending"
           :usage-percent="usagePercent"
           :workspace="payload?.identity.workspace"
@@ -33,6 +35,7 @@
           @refresh="loadDashboard"
           @respond-user-input="respondUserInput"
           @send="sendChat"
+          @toggle-plan-mode="togglePlanMode"
         />
       </main>
 
@@ -86,6 +89,7 @@ type CommandPayload = {
 const payload = ref<DashboardPayload | null>(null);
 const loading = ref(false);
 const sending = ref(false);
+const planModeLoading = ref(false);
 const loadingConversation = ref(false);
 const error = ref("");
 const autoRefresh = ref(true);
@@ -110,6 +114,7 @@ const mainNav: NavItem[] = [
 ];
 
 const usagePercent = computed(() => Number(payload.value?.usage.percent || 0));
+const planMode = computed(() => Boolean(payload.value?.mode?.plan_mode?.enabled));
 
 const activeModelLabel = computed(() => {
   const active = payload.value?.identity.models?.find((model: any) => model.active);
@@ -169,6 +174,19 @@ function applyUsageSnapshot(usage: any) {
     usage: {
       ...payload.value.usage,
       ...usage
+    }
+  };
+}
+
+function applyModeSnapshot(mode: any) {
+  if (!mode || !payload.value) {
+    return;
+  }
+  payload.value = {
+    ...payload.value,
+    mode: {
+      ...payload.value.mode,
+      ...mode
     }
   };
 }
@@ -627,6 +645,9 @@ async function handleCommandResult(data: any, options: { appendResult: boolean }
   if (data.usage) {
     applyUsageSnapshot(data.usage);
   }
+  if (data.mode) {
+    applyModeSnapshot(data.mode);
+  }
   if (Array.isArray(data.messages)) {
     chatMessages.value = mapMessages(data.messages);
   }
@@ -713,6 +734,55 @@ async function cancelChat() {
   });
 }
 
+async function togglePlanMode() {
+  if (planModeLoading.value || sending.value) {
+    return;
+  }
+  const nextEnabled = !planMode.value;
+  planModeLoading.value = true;
+  upsertActivity("mode:plan", {
+    type: "context",
+    label: nextEnabled ? "开启 Plan Mode" : "关闭 Plan Mode",
+    detail: nextEnabled ? "切换为只规划、只读取" : "恢复正常执行模式",
+    status: "active",
+    progress: 60
+  });
+  try {
+    const response = await fetch("/api/mode/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: nextEnabled })
+    });
+    const data = await response.json();
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.text || data.error || `Mode API ${response.status}`);
+    }
+    applyModeSnapshot(data.mode);
+    markActivity("mode:plan", {
+      label: nextEnabled ? "Plan Mode 已开启" : "Plan Mode 已关闭",
+      detail: data.text || "",
+      status: "done",
+      progress: 100
+    });
+  } catch (err) {
+    markActivity("mode:plan", {
+      label: "模式切换失败",
+      detail: err instanceof Error ? err.message : String(err),
+      status: "error"
+    });
+  } finally {
+    planModeLoading.value = false;
+    window.setTimeout(() => {
+      if (!sending.value && !planModeLoading.value) {
+        const event = activityEvents.value.find((item) => item.id === "mode:plan");
+        if (event && event.status !== "active") {
+          activityEvents.value = activityEvents.value.filter((item) => item.id !== "mode:plan");
+        }
+      }
+    }, 1200);
+  }
+}
+
 function upsertActivity(id: string, patch: Omit<ChatActivityEvent, "id"> & { status?: ChatActivityStatus }) {
   const existing = activityEvents.value.find((event) => event.id === id);
   if (existing) {
@@ -792,6 +862,19 @@ function handleActivityEvent(event: any) {
       label: failed ? copy.errorLabel : copy.doneLabel,
       detail: event.text ? String(event.text) : copy.doneDetail,
       status: failed ? "error" : "done",
+      toolName: name,
+      progress: 100
+    });
+    return;
+  }
+
+  if (type === "plan_mode_blocked") {
+    const name = String(event.name || "tool");
+    upsertActivity(`plan-blocked:${name}`, {
+      type: "error",
+      label: "Plan Mode 已拦截",
+      detail: String(event.reason || `${name} 暂不允许执行`),
+      status: "error",
       toolName: name,
       progress: 100
     });

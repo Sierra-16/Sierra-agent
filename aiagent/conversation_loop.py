@@ -228,6 +228,44 @@ def run_conversation_loop(
             args = real_args
 
         safe_arguments = sanitize_arguments(args)
+        plan_mode_allows_tool = getattr(agent, "plan_mode_allows_tool", None)
+        if callable(plan_mode_allows_tool):
+            allowed, reason = plan_mode_allows_tool(name, args)
+            if not allowed:
+                result = {
+                    "ok": False,
+                    "error": reason,
+                    "tool": name,
+                    "plan_mode": True,
+                }
+                if on_status:
+                    on_status({
+                        "type": "plan_mode_blocked",
+                        "name": name,
+                        "reason": reason,
+                    })
+                _write_audit({
+                    "tool": name,
+                    "policy_action": "plan_mode",
+                    "decision": "deny",
+                    "approved": False,
+                    "executed": False,
+                    "success": False,
+                    "duration_ms": 0,
+                    "arguments": safe_arguments,
+                    "reason": reason,
+                    "error": reason,
+                })
+                _record_skill_event(
+                    name,
+                    args,
+                    success=False,
+                    executed=False,
+                    duration_ms=0,
+                    error=reason,
+                )
+                return tc["id"], name, json.dumps(result, ensure_ascii=False)
+
         risk = agent.safety.assess(name, args)
         decision = agent.permission_policy.decide(name, risk.level)
 

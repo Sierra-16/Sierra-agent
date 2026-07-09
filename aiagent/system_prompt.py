@@ -65,6 +65,15 @@ USER_INPUT_GUIDANCE = (
 )
 
 
+TODO_GUIDANCE = (
+    "# 轻量待办清单\n"
+    "遇到包含多个小步骤、多个独立事项，或需要持续跟踪但还不值得创建正式可恢复任务计划的请求时，使用 todo 工具维护当前会话的工作清单。\n"
+    "todo 是你的短期工作记忆，不是用户的长期记忆；不要把已完成事项长期保留在上下文里。\n"
+    "开始复杂工作前写入清单；执行时保持最多一个 in_progress；完成一个步骤后及时标记 completed。\n"
+    "当任务需要跨中断恢复、涉及高风险工具检查点，或用户明确要求任务计划时，使用 update_plan；不要用 todo 替代正式任务计划。\n"
+)
+
+
 TASK_PLAN_GUIDANCE = (
     "# 任务计划与恢复\n"
     "遇到需要多个可验证步骤、多个工具或较长时间完成的任务时，先调用 update_plan 创建计划；"
@@ -84,6 +93,7 @@ def build_system_prompt(extra_context=None, skills=None, skills_prompt=None):
         MEMORY_GUIDANCE,
         POWERSHELL_GUIDANCE,
         USER_INPUT_GUIDANCE,
+        TODO_GUIDANCE,
         TASK_PLAN_GUIDANCE,
     ]
     if skills_prompt:

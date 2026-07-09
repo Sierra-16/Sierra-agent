@@ -37,6 +37,7 @@ LOW_RISK_TOOLS = {
     "skill_reload",
     "skill_usage_stats",
     "request_user_input",
+    "todo",
     "update_plan",
     "get_plan",
     "resolve_task_execution",

@@ -68,6 +68,10 @@ class CommandRequest(BaseModel):
     confirmed: bool = False
 
 
+class PlanModeRequest(BaseModel):
+    enabled: bool
+
+
 class UploadRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=260)
     content_base64: str = Field(min_length=1, max_length=40_000_000)
@@ -174,6 +178,35 @@ def create_dashboard_app(
             "ok": True,
             **_capabilities(app.state.gateway.agent),
         }
+
+    @app.get("/api/mode")
+    def mode_status() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "mode": _mode(app.state.gateway.agent),
+        }
+
+    @app.post("/api/mode/plan")
+    def set_plan_mode(request: PlanModeRequest) -> dict[str, Any]:
+        with app.state.chat_lock:
+            agent_ref = app.state.gateway.agent
+            setter = getattr(agent_ref, "set_plan_mode", None)
+            if not callable(setter):
+                return {
+                    "ok": False,
+                    "mode": _mode(agent_ref),
+                    "text": "当前 Agent 不支持 Plan Mode。",
+                }
+            status = setter(bool(request.enabled))
+            return {
+                "ok": True,
+                "mode": _mode(agent_ref),
+                "text": (
+                    "Plan Mode 已开启：Sierra 只会规划、读取和询问。"
+                    if status.get("enabled")
+                    else "Plan Mode 已关闭：Sierra 恢复正常执行模式。"
+                ),
+            }
 
     @app.get("/api/commands/catalog")
     def commands_catalog() -> dict[str, Any]:
@@ -1055,6 +1088,9 @@ def _switch_model(app: FastAPI, model_key: str) -> dict[str, Any]:
     previous_output_tokens = getattr(current_agent, "total_output_tokens", 0)
     previous_session_allows = set(getattr(getattr(current_agent, "permission_policy", None), "session_allow_tools", set()) or set())
     previous_task = _safe_call(current_agent, "task_status", default=None)
+    previous_plan_mode = bool(
+        (_safe_call(current_agent, "plan_mode_status", default={}) or {}).get("enabled")
+    )
 
     config["active_model"] = model_key
     config_path = getattr(app.state, "config_path", None)
@@ -1073,6 +1109,7 @@ def _switch_model(app: FastAPI, model_key: str) -> dict[str, Any]:
         new_agent.total_output_tokens = previous_output_tokens
         if hasattr(new_agent, "permission_policy"):
             new_agent.permission_policy.session_allow_tools.update(previous_session_allows)
+        _safe_call(new_agent, "set_plan_mode", previous_plan_mode, default=None)
         _safe_call(new_agent, "sync_memory_review_state", default=None)
         _safe_call(new_agent, "refresh_context_estimate", default=None)
         if isinstance(previous_task, dict) and previous_task.get("status") == "active":
@@ -1091,6 +1128,7 @@ def _switch_model(app: FastAPI, model_key: str) -> dict[str, Any]:
         "model": model_name,
         "text": f"已切换模型: {model_key}",
         "usage": _usage(_usage_snapshot(new_agent)),
+        "mode": _mode(new_agent),
         "messages": _web_messages(getattr(new_agent, "messages", [])),
     }
 
@@ -2318,6 +2356,7 @@ def build_dashboard_payload(
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "identity": _identity(agent, config),
+        "mode": _mode(agent),
         "usage": _usage(usage_snapshot),
         "conversation": _conversation(agent),
         "tools": _tools(agent),
@@ -2333,6 +2372,26 @@ def build_dashboard_payload(
         "context": _context(agent),
         "audit": _audit(agent),
         "sierra_frame": _sierra_frame(root_dir),
+    }
+
+
+def _mode(agent: Any) -> dict[str, Any]:
+    status = _safe_call(agent, "plan_mode_status", default={})
+    if not isinstance(status, dict):
+        status = {}
+    enabled = bool(status.get("enabled", False))
+    return {
+        "plan_mode": {
+            "enabled": enabled,
+            "mode": status.get("mode") or ("plan" if enabled else "normal"),
+            "label": status.get("label") or ("Plan Mode" if enabled else "Normal Mode"),
+            "description": status.get("description") or (
+                "只规划和读取信息，不执行写入、删除、终端、配置修改等动作。"
+                if enabled
+                else "按当前权限策略正常执行工具。"
+            ),
+            "allowed_tools": status.get("allowed_tools", []),
+        }
     }
 
 

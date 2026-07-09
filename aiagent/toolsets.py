@@ -102,7 +102,7 @@ TOOLSETS: dict[str, ToolsetDefinition] = {
     },
     "planning": {
         "description": "User clarification, task planning, and recovery state.",
-        "tools": ["request_user_input", "update_plan", "get_plan", "resolve_task_execution"],
+        "tools": ["request_user_input", "todo", "update_plan", "get_plan", "resolve_task_execution"],
         "includes": [],
     },
     "cron": {
