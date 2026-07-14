@@ -7,17 +7,6 @@
       </button>
 
       <div class="runtime-strip">
-        <button
-          class="plan-mode-toggle"
-          :class="{ active: planMode }"
-          type="button"
-          :disabled="sending || loading || planModeLoading"
-          :title="planMode ? 'Plan Mode 已开启：只规划和读取' : '开启 Plan Mode：先规划，不执行写入动作'"
-          @click="$emit('toggle-plan-mode')"
-        >
-          <ScrollText :size="14" />
-          <span>{{ planMode ? "计划中" : "计划" }}</span>
-        </button>
         <span class="model-chip" :title="activeModelLabel">{{ activeModelLabel }}</span>
         <span
           class="usage-orb"
@@ -280,6 +269,18 @@
       </div>
 
       <div class="composer-tools">
+        <button
+          type="button"
+          class="composer-tool-button plan-mode-toggle composer-plan-toggle"
+          :class="{ active: planMode }"
+          :disabled="sending || loading || planModeLoading"
+          :aria-pressed="planMode"
+          :title="planMode ? 'Plan Mode 已开启：Sierra 只规划和读取' : '开启 Plan Mode：先规划，不执行修改'"
+          @click="$emit('toggle-plan-mode')"
+        >
+          <ScrollText :size="15" />
+          <span>{{ planModeLoading ? "切换中" : planMode ? "计划模式" : "Plan Mode" }}</span>
+        </button>
         <button type="button" class="composer-tool-button" title="引用文件" @click="insertReferencePrefix('@file:')">
           <FileText :size="15" />
           <span>文件</span>
@@ -1421,43 +1422,42 @@ function setupMotion() {
     return;
   }
   gsapContext = gsap.context(() => {
-    gsap.set(
-      [
-        ".chat-statusbar",
-        ".composer-dock",
-        ".message-row",
-        ".process-panel",
-        ".process-feed-item",
-        ".process-actions",
-        ".message-attachment"
-      ],
-      { willChange: "transform, opacity" }
-    );
     if (prefersReducedMotion()) {
       return;
     }
-    gsap.from(".chat-statusbar", {
-      autoAlpha: 0,
-      y: -10,
-      duration: 0.42,
-      ease: "power2.out"
-    });
-    gsap.from(".composer-dock", {
-      autoAlpha: 0,
-      y: 22,
-      scale: 0.985,
-      duration: 0.52,
-      delay: 0.08,
-      ease: "power3.out"
-    });
-    gsap.from(".empty-hero h3", {
-      autoAlpha: 0,
-      y: 14,
-      scale: 0.98,
-      duration: 0.58,
-      delay: 0.16,
-      ease: "power3.out"
-    });
+    const intro = gsap.timeline({ defaults: { ease: "power3.out" } });
+    const emptyHeroTitle = workspaceRef.value?.querySelector<HTMLElement>(".empty-hero h3");
+    gsap.set([".chat-statusbar", ".composer-dock"], { willChange: "transform, opacity" });
+    gsap.set(".usage-orb", { willChange: "transform" });
+    intro
+      .from(".chat-statusbar", {
+        autoAlpha: 0,
+        y: -10,
+        duration: 0.42
+      })
+      .from(
+        ".composer-dock",
+        {
+          autoAlpha: 0,
+          y: 22,
+          scale: 0.985,
+          duration: 0.52
+        },
+        "<0.08"
+      );
+    if (emptyHeroTitle) {
+      intro.from(
+        emptyHeroTitle,
+        {
+          autoAlpha: 0,
+          y: 14,
+          scale: 0.98,
+          duration: 0.48
+        },
+        "<0.1"
+      );
+    }
+    intro.set([".chat-statusbar", ".composer-dock"], { clearProps: "willChange" });
     gsap.to(".usage-orb", {
       rotation: 360,
       duration: 12,
@@ -1470,6 +1470,8 @@ function setupMotion() {
   workspaceRef.value.addEventListener("pointerout", handleInteractiveOut);
   workspaceRef.value.addEventListener("pointerdown", handleInteractiveDown);
   workspaceRef.value.addEventListener("pointerup", handleInteractiveUp);
+  textareaRef.value?.addEventListener("focus", handleComposerFocusIn);
+  textareaRef.value?.addEventListener("blur", handleComposerFocusOut);
 }
 
 function cleanupMotion() {
@@ -1479,8 +1481,60 @@ function cleanupMotion() {
     workspaceRef.value.removeEventListener("pointerdown", handleInteractiveDown);
     workspaceRef.value.removeEventListener("pointerup", handleInteractiveUp);
   }
+  textareaRef.value?.removeEventListener("focus", handleComposerFocusIn);
+  textareaRef.value?.removeEventListener("blur", handleComposerFocusOut);
   gsapContext?.revert();
   gsapContext = undefined;
+}
+
+function animateComposerFocus(focused: boolean) {
+  const dock = workspaceRef.value?.querySelector<HTMLElement>(".composer-dock");
+  if (!dock) {
+    return;
+  }
+  runScopedAnimation(() => {
+    gsap.to(dock, {
+      y: focused ? -2 : 0,
+      scale: focused ? 1.003 : 1,
+      duration: focused ? 0.24 : 0.28,
+      ease: focused ? "power2.out" : "power3.out",
+      overwrite: "auto"
+    });
+  });
+}
+
+function handleComposerFocusIn() {
+  animateComposerFocus(true);
+}
+
+function handleComposerFocusOut() {
+  animateComposerFocus(false);
+}
+
+function animatePlanModeToggle(enabled: boolean) {
+  nextTick(() => {
+    const button = workspaceRef.value?.querySelector<HTMLElement>(".composer-plan-toggle");
+    if (!button) {
+      return;
+    }
+    const icon = button.querySelector("svg");
+    runScopedAnimation(() => {
+      const timeline = gsap.timeline({ defaults: { overwrite: "auto" } });
+      timeline.fromTo(
+        button,
+        { scale: 0.965, y: 1 },
+        { scale: 1, y: 0, duration: 0.34, ease: "back.out(2.1)", clearProps: "transform" }
+      );
+      if (icon) {
+        timeline.fromTo(
+          icon,
+          { rotation: enabled ? -10 : 8, scale: 0.9 },
+          { rotation: 0, scale: 1, duration: 0.3, ease: "back.out(2)", clearProps: "transform" },
+          "<"
+        );
+      }
+    });
+  });
 }
 
 function interactiveTarget(event: Event) {
@@ -1569,7 +1623,7 @@ function animateLatestMessage() {
     runScopedAnimation(() => {
       gsap.fromTo(
         row,
-        { autoAlpha: 0, x: direction, y: 8, scale: 0.985 },
+        { autoAlpha: 0, x: direction, y: 8, scale: 0.985, willChange: "transform, opacity" },
         {
           autoAlpha: 1,
           x: 0,
@@ -1577,17 +1631,21 @@ function animateLatestMessage() {
           scale: 1,
           duration: 0.28,
           ease: "power3.out",
-          overwrite: "auto"
+          overwrite: "auto",
+          clearProps: "transform,opacity,visibility,willChange"
         }
       );
-      gsap.from(row.querySelectorAll(".message-attachment"), {
-        autoAlpha: 0,
-        y: 12,
-        scale: 0.96,
-        duration: 0.34,
-        ease: "back.out(1.5)",
-        stagger: 0.06
-      });
+      const attachments = row.querySelectorAll(".message-attachment");
+      if (attachments.length) {
+        gsap.from(attachments, {
+          autoAlpha: 0,
+          y: 12,
+          scale: 0.96,
+          duration: 0.34,
+          ease: "back.out(1.5)",
+          stagger: 0.06
+        });
+      }
     });
   });
 }
@@ -1611,12 +1669,15 @@ function animateActivityPanel() {
             ? { autoAlpha: 1, y: 0, scale: 1, duration: 0.28 }
             : { y: 0, scale: 1, duration: 0.18 }
         );
-        timeline.fromTo(
-          panel.querySelectorAll(".process-phase.active"),
-          { y: 2, scale: 0.94 },
-          { y: 0, scale: 1, duration: 0.22, stagger: 0.025 },
-          firstRun ? "<0.08" : "<"
-        );
+        const activePhases = panel.querySelectorAll(".process-phase.active");
+        if (activePhases.length) {
+          timeline.fromTo(
+            activePhases,
+            { y: 2, scale: 0.94 },
+            { y: 0, scale: 1, duration: 0.22, stagger: 0.025 },
+            firstRun ? "<0.08" : "<"
+          );
+        }
       }
       if (feedItems?.length) {
         gsap.fromTo(
@@ -1740,4 +1801,6 @@ watch(uploadState, (value) => {
     animateUploadState();
   }
 });
+
+watch(() => props.planMode, animatePlanModeToggle, { flush: "post" });
 </script>

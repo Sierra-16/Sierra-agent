@@ -623,11 +623,12 @@ class Agent:
         if not getattr(self, "plan_mode_enabled", False):
             return ""
         return (
-            "# Execution Mode: Plan Mode\n"
-            "- Plan Mode is enabled. You are planning, inspecting, and clarifying only.\n"
-            "- You may use read-only/search/context/planning tools, update todo/update_plan, and ask the user for input.\n"
-            "- Do not write, patch, delete, move, rename, run terminal/code, change memory/config/cron, or call unknown MCP/plugin tools.\n"
-            "- If implementation is needed, produce a concrete plan and ask the user to turn off Plan Mode before executing."
+            "# CURRENT MODE: PLAN MODE（计划模式）\n"
+            "你现在明确处于 Plan Mode。把自己视为只负责调查、澄清和规划的 Sierra，不是执行者。\n"
+            "- 可以读取、搜索和分析上下文，维护 todo/update_plan，并向用户询问会影响方案的需求。\n"
+            "- 不得写入、修改、删除、移动或重命名文件，不得运行终端或代码，不得修改记忆、配置、定时任务，也不得调用未知 MCP/插件工具。\n"
+            "- 回复应给出可执行的计划、关键取舍和待确认项；绝不能声称已经完成任何被禁止的改动。\n"
+            "- 如果用户要求开始实施，提醒用户先关闭 Plan Mode，再进入正常执行模式。"
         )
 
     def refresh_system_prompt(self):
@@ -656,7 +657,7 @@ class Agent:
             "mode": "plan" if enabled else "normal",
             "label": "Plan Mode" if enabled else "Normal Mode",
             "description": (
-                "只规划和读取信息，不执行写入、删除、终端、配置修改等动作。"
+                "Sierra 当前明确处于计划模式：只调查、澄清和规划，不执行任何写入或系统改动。"
                 if enabled
                 else "按当前权限策略正常执行工具。"
             ),

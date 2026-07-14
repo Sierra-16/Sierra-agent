@@ -118,6 +118,16 @@ class DashboardPlanAgent:
 
 
 class AgentPlanModeTests(unittest.TestCase):
+    def test_plan_mode_prompt_explicitly_declares_current_mode(self):
+        agent = object.__new__(Agent)
+        agent.plan_mode_enabled = True
+
+        prompt = Agent._plan_mode_prompt_context(agent)
+
+        self.assertIn("CURRENT MODE: PLAN MODE", prompt)
+        self.assertIn("只负责调查、澄清和规划", prompt)
+        self.assertIn("不是执行者", prompt)
+
     def test_plan_mode_blocks_mutating_tool_before_policy_prompt(self):
         agent = PlanModeAgent("write_file")
         events = []

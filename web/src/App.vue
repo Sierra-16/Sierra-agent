@@ -102,7 +102,7 @@ const bootstrappedConversation = ref(false);
 const appShellRef = ref<HTMLElement | null>(null);
 let timer: number | undefined;
 let activeChatAbortController: AbortController | null = null;
-let shellMotion: ReturnType<typeof gsap.context> | undefined;
+let shellMotion: ReturnType<typeof gsap.matchMedia> | undefined;
 let toolRunCounter = 0;
 let conversationLoadSeq = 0;
 let chatRunSeq = 0;
@@ -1208,26 +1208,48 @@ function startTimer() {
 }
 
 function setupShellMotion() {
-  if (!appShellRef.value || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+  if (!appShellRef.value) {
     return;
   }
-  shellMotion = gsap.context(() => {
-    gsap.set([".sidebar-shell", ".main-shell"], { willChange: "transform, opacity" });
-    gsap.from(".sidebar-shell", {
-      autoAlpha: 0,
-      x: -18,
-      duration: 0.52,
-      ease: "power3.out"
-    });
-    gsap.from(".main-shell", {
-      autoAlpha: 0,
-      y: 16,
-      scale: 0.992,
-      duration: 0.58,
-      delay: 0.08,
-      ease: "power3.out"
-    });
-  }, appShellRef.value);
+  shellMotion = gsap.matchMedia();
+  shellMotion.add(
+    {
+      compact: "(max-width: 860px)",
+      reduceMotion: "(prefers-reduced-motion: reduce)"
+    },
+    (context) => {
+      const conditions = context.conditions as { compact: boolean; reduceMotion: boolean };
+      if (conditions.reduceMotion) {
+        return;
+      }
+      const distance = conditions.compact ? 10 : 18;
+      const timeline = gsap.timeline({
+        defaults: { ease: "power3.out" }
+      });
+
+      gsap.set([".sidebar-shell", ".main-shell"], { willChange: "transform, opacity" });
+      timeline
+        .from(".sidebar-shell", {
+          autoAlpha: 0,
+          x: -distance,
+          duration: 0.52
+        })
+        .from(
+          ".main-shell",
+          {
+            autoAlpha: 0,
+            y: distance * 0.8,
+            scale: 0.992,
+            duration: 0.58
+          },
+          "<0.06"
+        )
+        .set([".sidebar-shell", ".main-shell"], { clearProps: "willChange" });
+
+      return () => timeline.kill();
+    },
+    appShellRef.value
+  );
 }
 
 watch(autoRefresh, startTimer);

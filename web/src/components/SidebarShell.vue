@@ -1,5 +1,5 @@
 <template>
-  <aside class="sidebar-shell">
+  <aside ref="sidebarRef" class="sidebar-shell">
     <div class="brand-cluster">
       <img class="brand-avatar" src="/brand/sierra-avatar.png?v=transparent-1" alt="Sierra" />
       <div class="brand-copy">
@@ -97,12 +97,13 @@
 
 <script setup lang="ts">
 import { Check, MessageCircle, Pencil, Plus, Settings2, Trash2, X } from "lucide-vue-next";
-import { ref } from "vue";
+import { gsap } from "gsap";
+import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { DashboardPayload, NavItem, SessionSummary, ViewId } from "../types";
 import { formatTimestamp } from "../types";
 import SierraOrnaments from "./SierraOrnaments.vue";
 
-defineProps<{
+const props = defineProps<{
   activeSessionId: string;
   activeView: ViewId;
   error: string;
@@ -124,6 +125,95 @@ const emit = defineEmits<{
 
 const editingSessionId = ref("");
 const editingTitle = ref("");
+const sidebarRef = ref<HTMLElement | null>(null);
+let sidebarMotion: ReturnType<typeof gsap.matchMedia> | undefined;
+const animatedSessionIds = new Set<string>();
+
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+}
+
+function setupSidebarMotion() {
+  if (!sidebarRef.value) {
+    return;
+  }
+  sidebarMotion = gsap.matchMedia();
+  sidebarMotion.add(
+    {
+      compact: "(max-width: 860px)",
+      reduceMotion: "(prefers-reduced-motion: reduce)"
+    },
+    (context) => {
+      const conditions = context.conditions as { compact: boolean; reduceMotion: boolean };
+      if (conditions.reduceMotion) {
+        return;
+      }
+      const timeline = gsap.timeline({
+        defaults: { duration: conditions.compact ? 0.28 : 0.38, ease: "power3.out" }
+      });
+      timeline
+        .from(".brand-cluster", { autoAlpha: 0, x: -10 })
+        .from(".primary-action", { autoAlpha: 0, y: 8, scale: 0.98 }, "<0.08")
+        .from(".main-nav", { autoAlpha: 0, y: 7 }, "<0.06")
+        .from(".sidebar-label", { autoAlpha: 0, x: -6 }, "<0.06")
+        .from(".sidebar-footer", { autoAlpha: 0, y: 8 }, "<0.04");
+      return () => timeline.kill();
+    },
+    sidebarRef.value
+  );
+}
+
+async function animateNewSessions() {
+  await nextTick();
+  if (!sidebarRef.value) {
+    return;
+  }
+  const rows = Array.from(sidebarRef.value.querySelectorAll<HTMLElement>(".session-row"));
+  const freshRows = rows.filter((row, index) => {
+    const id = String(props.recentSessions[index]?.id || "");
+    if (!id || animatedSessionIds.has(id)) {
+      return false;
+    }
+    animatedSessionIds.add(id);
+    return true;
+  });
+  if (!freshRows.length || prefersReducedMotion()) {
+    return;
+  }
+  gsap.fromTo(
+    freshRows,
+    { autoAlpha: 0, x: -8, y: 4 },
+    {
+      autoAlpha: 1,
+      x: 0,
+      y: 0,
+      duration: 0.3,
+      ease: "power2.out",
+      stagger: 0.035,
+      clearProps: "transform,opacity,visibility"
+    }
+  );
+}
+
+async function animateActiveSession() {
+  await nextTick();
+  const row = sidebarRef.value?.querySelector<HTMLElement>(".session-row.active");
+  if (!row || prefersReducedMotion()) {
+    return;
+  }
+  gsap.killTweensOf(row);
+  gsap.fromTo(
+    row,
+    { x: -4, scale: 0.985 },
+    {
+      x: 0,
+      scale: 1,
+      duration: 0.34,
+      ease: "back.out(1.8)",
+      clearProps: "transform"
+    }
+  );
+}
 
 function sessionTitle(session: SessionSummary) {
   return String(session.title || "未命名会话");
@@ -157,4 +247,24 @@ function confirmDelete(session: SessionSummary) {
     emit("delete-session", id);
   }
 }
+
+watch(
+  () => props.recentSessions.map((session) => String(session.id || "")).join("|"),
+  animateNewSessions,
+  { flush: "post" }
+);
+
+watch(() => props.activeSessionId, animateActiveSession, { flush: "post" });
+
+onMounted(() => {
+  setupSidebarMotion();
+  animateNewSessions();
+});
+
+onUnmounted(() => {
+  sidebarMotion?.revert();
+  if (sidebarRef.value) {
+    gsap.killTweensOf(sidebarRef.value.querySelectorAll("*"));
+  }
+});
 </script>

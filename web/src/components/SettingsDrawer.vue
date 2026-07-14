@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <Transition name="drawer">
+    <Transition :css="false" @enter="enterSettings" @leave="leaveSettings">
       <div v-if="open" class="settings-overlay" @keydown.esc="$emit('close')">
         <button class="settings-backdrop" type="button" aria-label="关闭设置" @click="$emit('close')"></button>
         <aside
@@ -818,7 +818,7 @@ import {
   X
 } from "lucide-vue-next";
 import { gsap } from "gsap";
-import { computed, defineComponent, h, ref, watch } from "vue";
+import { computed, defineComponent, h, nextTick, onUnmounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import type { DashboardPayload } from "../types";
 
@@ -860,6 +860,7 @@ const emit = defineEmits<{
 
 const activeSection = ref<SettingsSection>("model");
 const settingsDrawerRef = ref<HTMLElement | null>(null);
+let settingsTimeline: ReturnType<typeof gsap.timeline> | undefined;
 const cronMinutes = ref(60);
 const cronPrompt = ref("");
 const memoryQuery = ref("");
@@ -1253,6 +1254,94 @@ const canDeleteModel = computed(() => {
   return Boolean(modelForm.value.key) && modelConfigs.value.length > 1 && !modelConfigs.value.find((item) => item.key === modelForm.value.key)?.active;
 });
 
+function enterSettings(element: Element, done: () => void) {
+  const root = element as HTMLElement;
+  const backdrop = root.querySelector<HTMLElement>(".settings-backdrop");
+  const drawer = root.querySelector<HTMLElement>(".settings-drawer");
+  if (!backdrop || !drawer || prefersReducedMotion()) {
+    done();
+    return;
+  }
+
+  settingsTimeline?.kill();
+  const navGroups = drawer.querySelectorAll<HTMLElement>(".settings-brand, .settings-nav-group, .settings-sidebar-footer");
+  const header = drawer.querySelector<HTMLElement>(".settings-main-header");
+  settingsTimeline = gsap.timeline({ defaults: { ease: "power3.out" } });
+  gsap.set([backdrop, drawer], { willChange: "transform, opacity" });
+  settingsTimeline
+    .fromTo(backdrop, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.24 }, 0)
+    .fromTo(
+      drawer,
+      { autoAlpha: 0, y: 18, scale: 0.985 },
+      { autoAlpha: 1, y: 0, scale: 1, duration: 0.44 },
+      0.04
+    )
+    .fromTo(
+      navGroups,
+      { autoAlpha: 0, x: -8 },
+      { autoAlpha: 1, x: 0, duration: 0.28, stagger: 0.035 },
+      0.13
+    )
+    .fromTo(header, { autoAlpha: 0, y: -7 }, { autoAlpha: 1, y: 0, duration: 0.3 }, 0.14)
+    .set([backdrop, drawer], { clearProps: "willChange" })
+    .eventCallback("onComplete", done)
+    .eventCallback("onInterrupt", done);
+}
+
+function leaveSettings(element: Element, done: () => void) {
+  const root = element as HTMLElement;
+  const backdrop = root.querySelector<HTMLElement>(".settings-backdrop");
+  const drawer = root.querySelector<HTMLElement>(".settings-drawer");
+  if (!backdrop || !drawer || prefersReducedMotion()) {
+    done();
+    return;
+  }
+
+  settingsTimeline?.kill();
+  settingsTimeline = gsap.timeline({ defaults: { ease: "power2.inOut" } });
+  settingsTimeline
+    .to(drawer, { autoAlpha: 0, y: 12, scale: 0.99, duration: 0.22 }, 0)
+    .to(backdrop, { autoAlpha: 0, duration: 0.2 }, 0.04)
+    .eventCallback("onComplete", done)
+    .eventCallback("onInterrupt", done);
+}
+
+async function animateSettingsSection() {
+  await nextTick();
+  const drawer = settingsDrawerRef.value;
+  const section = drawer?.querySelector<HTMLElement>(".settings-section");
+  if (!drawer || !section || !props.open || prefersReducedMotion()) {
+    return;
+  }
+  const blocks = Array.from(
+    section.querySelectorAll<HTMLElement>(
+      ".settings-page-toolbar, .settings-kpi-grid > *, .settings-config-layout > *, .settings-row, .integration-card"
+    )
+  ).slice(0, 16);
+  gsap.killTweensOf([section, ...blocks]);
+  const timeline = gsap.timeline({ defaults: { ease: "power3.out", overwrite: "auto" } });
+  timeline
+    .fromTo(
+      section,
+      { autoAlpha: 0, x: 10 },
+      { autoAlpha: 1, x: 0, duration: 0.26, clearProps: "transform,opacity,visibility" }
+    );
+  if (blocks.length) {
+    timeline.fromTo(
+      blocks,
+      { autoAlpha: 0, y: 7 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        duration: 0.24,
+        stagger: 0.025,
+        clearProps: "transform,opacity,visibility"
+      },
+      "<0.06"
+    );
+  }
+}
+
 watch(
   () => props.open,
   (open) => {
@@ -1267,6 +1356,15 @@ watch(
 watch(models, () => {
   if (!modelConfigs.value.length) {
     modelConfigs.value = models.value.map((model: any) => ({ ...model }));
+  }
+});
+
+watch(activeSection, animateSettingsSection, { flush: "post" });
+
+onUnmounted(() => {
+  settingsTimeline?.kill();
+  if (settingsDrawerRef.value) {
+    gsap.killTweensOf(settingsDrawerRef.value.querySelectorAll("*"));
   }
 });
 
