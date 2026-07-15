@@ -1,133 +1,202 @@
 <template>
-  <aside ref="sidebarRef" class="sidebar-shell">
-    <div class="brand-cluster">
-      <img class="brand-avatar" src="/brand/sierra-avatar.png?v=transparent-1" alt="Sierra" />
+  <aside
+    ref="sidebarRef"
+    class="sidebar-shell"
+    :class="{ 'mobile-open': mobileOpen }"
+    :aria-hidden="compactLayout && !mobileOpen"
+  >
+    <header class="brand-cluster">
+      <img
+        class="brand-avatar"
+        src="/brand/sierra-avatar.png?v=transparent-1"
+        alt=""
+        width="44"
+        height="44"
+      />
       <div class="brand-copy">
-        <h1>Sierra</h1>
+        <h1 translate="no">Sierra</h1>
+        <span class="brand-presence" :class="{ offline: error }">
+          <i aria-hidden="true"></i>
+          {{ error ? "连接异常" : "在线" }}
+        </span>
       </div>
-    </div>
+      <button
+        v-if="compactLayout"
+        class="sidebar-close"
+        type="button"
+        aria-label="关闭会话列表"
+        @click="$emit('close')"
+      >
+        <PanelLeftClose :size="18" aria-hidden="true" />
+      </button>
+    </header>
 
-    <button class="primary-action" type="button" @click="$emit('new-chat')">
-      <SierraOrnaments variant="button" compact />
-      <Plus :size="16" />
-      新会话
+    <button class="primary-action" type="button" @click="openNewChat">
+      <Plus :size="17" aria-hidden="true" />
+      <span>新会话</span>
+      <kbd aria-hidden="true">Ctrl N</kbd>
     </button>
 
-    <nav class="main-nav" aria-label="Sierra dashboard">
-      <button
-        v-for="item in navItems"
-        :key="item.id"
-        class="nav-button"
-        :class="{ active: activeView === item.id }"
-        type="button"
-        @click="$emit('select-view', item.id)"
-      >
-        <component :is="item.icon" :size="17" />
-        <span>
-          <strong>{{ item.label }}</strong>
-          <small>{{ item.subtitle }}</small>
-        </span>
-      </button>
-    </nav>
-
-    <section class="session-stack">
-      <div class="sidebar-label">会话记录</div>
-      <div
-        v-for="session in recentSessions"
-        :key="session.id"
-        class="session-row"
-        :class="{ active: activeSessionId === session.id }"
-      >
-        <form
-          v-if="editingSessionId === session.id"
-          class="session-edit-form"
-          @submit.prevent="commitRename(session)"
+    <section class="session-stack" aria-labelledby="session-list-title">
+      <header class="session-stack-header">
+        <div>
+          <span id="session-list-title" class="sidebar-label">会话</span>
+          <b>{{ recentSessions.length }}</b>
+        </div>
+        <button
+          class="sidebar-refresh"
+          type="button"
+          :disabled="loading"
+          aria-label="刷新会话"
+          @click="$emit('refresh')"
         >
-          <input
-            v-model="editingTitle"
-            aria-label="会话名称"
-            maxlength="120"
-            @keydown.esc.prevent="cancelRename"
-          />
-          <button class="session-action confirm" type="submit" title="保存">
-            <Check :size="14" />
-          </button>
-          <button class="session-action" type="button" title="取消" @click="cancelRename">
-            <X :size="14" />
-          </button>
-        </form>
-        <template v-else>
-          <button
-            class="session-link"
-            :class="{ active: activeSessionId === session.id }"
-            type="button"
-            @click="$emit('open-session', session.id)"
+          <RefreshCw :size="14" aria-hidden="true" />
+        </button>
+      </header>
+
+      <label class="session-search">
+        <span class="sr-only">搜索会话</span>
+        <Search :size="15" aria-hidden="true" />
+        <input
+          v-model.trim="sessionQuery"
+          name="session-search"
+          type="search"
+          autocomplete="off"
+          placeholder="搜索会话…"
+        />
+      </label>
+
+      <div class="session-list">
+        <div
+          v-for="session in filteredSessions"
+          :key="session.id"
+          class="session-row"
+          :class="{ active: activeSessionId === session.id }"
+        >
+          <form
+            v-if="editingSessionId === session.id"
+            class="session-edit-form"
+            @submit.prevent="commitRename(session)"
           >
-            <MessageCircle :size="15" />
-            <span>
-              <strong>{{ sessionTitle(session) }}</strong>
-              <small>{{ formatTimestamp(session.updated || session.updated_at || session.created) }}</small>
-            </span>
-          </button>
-          <div class="session-actions" aria-label="会话操作">
-            <button class="session-action" type="button" title="重命名" @click="beginRename(session)">
-              <Pencil :size="13" />
+            <input
+              v-model="editingTitle"
+              name="session-title"
+              aria-label="会话名称"
+              autocomplete="off"
+              maxlength="120"
+              @keydown.esc.prevent="cancelRename"
+            />
+            <button class="session-action confirm" type="submit" aria-label="保存会话名称">
+              <Check :size="14" aria-hidden="true" />
             </button>
-            <button class="session-action danger" type="button" title="删除" @click="confirmDelete(session)">
-              <Trash2 :size="13" />
+            <button class="session-action" type="button" aria-label="取消重命名" @click="cancelRename">
+              <X :size="14" aria-hidden="true" />
             </button>
-          </div>
-        </template>
+          </form>
+          <template v-else>
+            <button
+              class="session-link"
+              :class="{ active: activeSessionId === session.id }"
+              type="button"
+              @click="openSession(session.id)"
+            >
+              <MessageCircle :size="15" aria-hidden="true" />
+              <span>
+                <strong>{{ sessionTitle(session) }}</strong>
+                <small>{{ formatTimestamp(session.updated || session.updated_at || session.created) }}</small>
+              </span>
+            </button>
+            <div class="session-actions" aria-label="会话操作">
+              <button
+                class="session-action"
+                type="button"
+                :aria-label="`重命名会话 ${sessionTitle(session)}`"
+                @click="beginRename(session)"
+              >
+                <Pencil :size="13" aria-hidden="true" />
+              </button>
+              <button
+                class="session-action danger"
+                type="button"
+                :aria-label="`删除会话 ${sessionTitle(session)}`"
+                @click="confirmDelete(session)"
+              >
+                <Trash2 :size="13" aria-hidden="true" />
+              </button>
+            </div>
+          </template>
+        </div>
+        <p v-if="!recentSessions.length" class="sidebar-empty">还没有会话，先和 Sierra 说句话。</p>
+        <p v-else-if="!filteredSessions.length" class="sidebar-empty">没有匹配的会话。</p>
       </div>
-      <p v-if="!recentSessions.length" class="sidebar-empty">暂无会话记录</p>
     </section>
 
-    <section class="sidebar-footer">
-      <button class="settings-line" type="button" @click="$emit('open-settings')">
-        <SierraOrnaments variant="button" compact />
-        <Settings2 :size="17" />
+    <footer class="sidebar-footer">
+      <button class="settings-line" type="button" @click="openSettings">
+        <Settings2 :size="18" aria-hidden="true" />
         <span>
           <strong>设置</strong>
-          <small>模型、能力、工具接入</small>
+          <small>模型、能力与接入</small>
         </span>
+        <ChevronRight :size="15" aria-hidden="true" />
       </button>
-    </section>
+    </footer>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { Check, MessageCircle, Pencil, Plus, Settings2, Trash2, X } from "lucide-vue-next";
+import {
+  Check,
+  ChevronRight,
+  MessageCircle,
+  PanelLeftClose,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings2,
+  Trash2,
+  X
+} from "lucide-vue-next";
 import { gsap } from "gsap";
-import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import type { DashboardPayload, NavItem, SessionSummary, ViewId } from "../types";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import type { DashboardPayload, SessionSummary } from "../types";
 import { formatTimestamp } from "../types";
-import SierraOrnaments from "./SierraOrnaments.vue";
 
 const props = defineProps<{
   activeSessionId: string;
-  activeView: ViewId;
+  compactLayout: boolean;
   error: string;
   loading: boolean;
-  navItems: NavItem[];
+  mobileOpen: boolean;
   payload: DashboardPayload | null;
   recentSessions: SessionSummary[];
 }>();
 
 const emit = defineEmits<{
-  (event: "select-view", value: ViewId): void;
   (event: "new-chat"): void;
   (event: "open-session", value: string): void;
   (event: "rename-session", value: { id: string; title: string }): void;
   (event: "delete-session", value: string): void;
   (event: "refresh"): void;
   (event: "open-settings"): void;
+  (event: "close"): void;
 }>();
 
 const editingSessionId = ref("");
 const editingTitle = ref("");
+const sessionQuery = ref("");
 const sidebarRef = ref<HTMLElement | null>(null);
 let sidebarMotion: ReturnType<typeof gsap.matchMedia> | undefined;
 const animatedSessionIds = new Set<string>();
+
+const filteredSessions = computed(() => {
+  const query = sessionQuery.value.trim().toLocaleLowerCase();
+  if (!query) {
+    return props.recentSessions;
+  }
+  return props.recentSessions.filter((session) => sessionTitle(session).toLocaleLowerCase().includes(query));
+});
 
 function prefersReducedMotion() {
   return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
@@ -145,7 +214,7 @@ function setupSidebarMotion() {
     },
     (context) => {
       const conditions = context.conditions as { compact: boolean; reduceMotion: boolean };
-      if (conditions.reduceMotion) {
+      if (conditions.reduceMotion || conditions.compact) {
         return;
       }
       const timeline = gsap.timeline({
@@ -215,8 +284,49 @@ async function animateActiveSession() {
   );
 }
 
+async function animateMobileDrawer() {
+  await nextTick();
+  const sidebar = sidebarRef.value;
+  if (!sidebar) {
+    return;
+  }
+  if (!props.compactLayout) {
+    gsap.set(sidebar, { clearProps: "transform,opacity,visibility" });
+    return;
+  }
+  if (prefersReducedMotion()) {
+    gsap.set(sidebar, {
+      xPercent: props.mobileOpen ? 0 : -104,
+      autoAlpha: props.mobileOpen ? 1 : 0
+    });
+    return;
+  }
+  gsap.to(sidebar, {
+    xPercent: props.mobileOpen ? 0 : -104,
+    autoAlpha: props.mobileOpen ? 1 : 0,
+    duration: props.mobileOpen ? 0.34 : 0.24,
+    ease: props.mobileOpen ? "power3.out" : "power2.in",
+    overwrite: "auto"
+  });
+}
+
 function sessionTitle(session: SessionSummary) {
   return String(session.title || "未命名会话");
+}
+
+function openNewChat() {
+  emit("new-chat");
+  emit("close");
+}
+
+function openSession(sessionId: string) {
+  emit("open-session", sessionId);
+  emit("close");
+}
+
+function openSettings() {
+  emit("open-settings");
+  emit("close");
 }
 
 function beginRename(session: SessionSummary) {
@@ -255,6 +365,11 @@ watch(
 );
 
 watch(() => props.activeSessionId, animateActiveSession, { flush: "post" });
+watch(
+  () => [props.mobileOpen, props.compactLayout],
+  animateMobileDrawer,
+  { flush: "post", immediate: true }
+);
 
 onMounted(() => {
   setupSidebarMotion();

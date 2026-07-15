@@ -16,7 +16,7 @@
         >
           <nav class="settings-sidebar" aria-label="设置导航">
             <div class="settings-brand">
-              <img src="/brand/sierra-avatar.png?v=transparent-1" alt="" />
+              <img src="/brand/sierra-avatar.png?v=transparent-1" alt="" width="38" height="38" />
               <span>
                 <strong>Sierra</strong>
                 <small>控制中心</small>
@@ -66,8 +66,8 @@
                   <strong>{{ usagePercent.toFixed(0) }}%</strong>
                 </span>
               </div>
-              <button class="icon-action" type="button" title="关闭" @click="$emit('close')">
-                <X :size="18" />
+              <button class="icon-action" type="button" aria-label="关闭设置" title="关闭" @click="$emit('close')">
+                <X :size="18" aria-hidden="true" />
               </button>
             </header>
 
@@ -248,7 +248,7 @@
                       <span>Skill 列表</span>
                       <b>{{ filteredSkills.length }}/{{ skills.length }}</b>
                     </div>
-                    <input v-model="skillQuery" class="settings-list-search" type="text" placeholder="搜索 skill、分类或描述..." />
+                    <input v-model="skillQuery" class="settings-list-search" type="text" placeholder="搜索 Skill、分类或描述…" />
                     <button
                       v-for="skill in filteredSkills"
                       :key="skill.name"
@@ -609,7 +609,7 @@
                 </div>
 
                 <div class="tool-control-strip">
-                  <input v-model="toolQuery" type="text" placeholder="搜索工具、描述或工具集..." />
+                  <input v-model="toolQuery" type="text" placeholder="搜索工具、描述或工具集…" />
                   <select v-model="toolExposureFilter" aria-label="工具暴露方式">
                     <option value="all">全部方式</option>
                     <option value="direct">直接可见</option>
@@ -662,7 +662,7 @@
               <section v-else-if="activeSection === 'memory'" class="settings-section">
                 <SectionTitle title="记忆" description="搜索长期记忆，查看记忆存储状态，或清理当前工作区的记忆。" />
                 <div class="settings-form">
-                  <input v-model="memoryQuery" type="text" placeholder="搜索记忆..." />
+                  <input v-model="memoryQuery" type="text" placeholder="搜索记忆…" />
                   <button type="button" :disabled="panelBusy === 'memory_search'" @click="searchMemory">搜索</button>
                 </div>
                 <div class="settings-form">
@@ -1495,8 +1495,8 @@ async function toggleModelVision() {
   }
   const ok = await saveModel({
     pendingText: modelForm.value.supports_vision
-      ? "正在启用图片理解，并热重载 Sierra..."
-      : "正在关闭图片理解，并热重载 Sierra..."
+      ? "正在启用图片理解，并热重载 Sierra…"
+      : "正在关闭图片理解，并热重载 Sierra…"
   });
   if (!ok) {
     modelForm.value.supports_vision = previous;

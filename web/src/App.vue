@@ -1,24 +1,32 @@
 <template>
-  <div ref="appShellRef" class="app-shell">
+  <div ref="appShellRef" class="app-shell workspace-v2">
+    <a class="skip-link" href="#sierra-chat">跳到聊天</a>
+    <button
+      v-if="compactLayout && sidebarOpen"
+      class="sidebar-backdrop"
+      type="button"
+      aria-label="关闭会话列表"
+      @click="sidebarOpen = false"
+    ></button>
     <SidebarShell
       :active-session-id="activeSessionId"
-      :active-view="activeView"
+      :compact-layout="compactLayout"
       :error="error"
       :loading="loading"
-      :nav-items="mainNav"
+      :mobile-open="sidebarOpen"
       :payload="payload"
       :recent-sessions="recentSessions"
       @delete-session="deleteSession"
-      @new-chat="startLocalChat"
-      @open-session="openSession"
+      @new-chat="startChatFromNavigation"
+      @open-session="openSessionFromNavigation"
       @rename-session="renameSession"
       @refresh="loadDashboard"
-      @open-settings="settingsOpen = true"
-      @select-view="activeView = $event"
+      @close="sidebarOpen = false"
+      @open-settings="openSettingsFromNavigation"
     />
 
     <section class="main-shell">
-      <main v-if="payload" class="content-stage">
+      <main v-if="payload" id="sierra-chat" class="content-stage" tabindex="-1">
         <ChatWorkspace
           :active-model-label="activeModelLabel"
           :activity-events="activityEvents"
@@ -29,9 +37,9 @@
           :plan-mode-loading="planModeLoading"
           :sending="sending"
           :usage-percent="usagePercent"
-          :workspace="payload?.identity.workspace"
           @approve-tool="respondToolApproval"
           @cancel-chat="cancelChat"
+          @open-navigation="sidebarOpen = true"
           @refresh="loadDashboard"
           @respond-user-input="respondUserInput"
           @send="sendChat"
@@ -41,7 +49,7 @@
 
       <main v-else class="loading-state">
         <Sparkles :size="30" />
-        <p>{{ error || "正在唤醒 Sierra..." }}</p>
+        <p aria-live="polite">{{ error || "正在唤醒 Sierra…" }}</p>
       </main>
     </section>
 
@@ -57,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { MessageCircle, Sparkles } from "lucide-vue-next";
+import { Sparkles } from "lucide-vue-next";
 import { gsap } from "gsap";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import ChatWorkspace from "./components/ChatWorkspace.vue";
@@ -68,9 +76,7 @@ import type {
   ChatActivityStatus,
   ChatMessage,
   DashboardPayload,
-  NavItem,
-  SessionSummary,
-  ViewId
+  SessionSummary
 } from "./types";
 
 type CommandPayload = {
@@ -93,9 +99,10 @@ const planModeLoading = ref(false);
 const loadingConversation = ref(false);
 const error = ref("");
 const autoRefresh = ref(true);
-const activeView = ref<ViewId>("chat");
 const activeSessionId = ref("");
 const settingsOpen = ref(false);
+const sidebarOpen = ref(false);
+const compactLayout = ref(false);
 const chatMessages = ref<ChatMessage[]>([]);
 const activityEvents = ref<ChatActivityEvent[]>([]);
 const bootstrappedConversation = ref(false);
@@ -107,11 +114,8 @@ let toolRunCounter = 0;
 let conversationLoadSeq = 0;
 let chatRunSeq = 0;
 let conversationActivationPromise: Promise<void> | null = null;
+let compactLayoutMedia: MediaQueryList | null = null;
 const activeToolRuns = new Map<string, string>();
-
-const mainNav: NavItem[] = [
-  { id: "chat", label: "会话", subtitle: "Chat", icon: MessageCircle }
-];
 
 const usagePercent = computed(() => Number(payload.value?.usage.percent || 0));
 const planMode = computed(() => Boolean(payload.value?.mode?.plan_mode?.enabled));
@@ -210,6 +214,28 @@ function openSession(sessionId: string) {
   loadConversation(sessionId);
 }
 
+function openSessionFromNavigation(sessionId: string) {
+  sidebarOpen.value = false;
+  openSession(sessionId);
+}
+
+function startChatFromNavigation() {
+  sidebarOpen.value = false;
+  void startLocalChat();
+}
+
+function openSettingsFromNavigation() {
+  sidebarOpen.value = false;
+  settingsOpen.value = true;
+}
+
+function syncCompactLayout(event?: MediaQueryListEvent) {
+  compactLayout.value = event ? event.matches : Boolean(compactLayoutMedia?.matches);
+  if (!compactLayout.value) {
+    sidebarOpen.value = false;
+  }
+}
+
 async function activateConversation(sessionId: string, requestId: number) {
   try {
     const response = await fetch(`/api/conversations/${encodeURIComponent(sessionId)}/activate`, {
@@ -244,7 +270,6 @@ async function startLocalChat() {
     void fetch("/api/chat/cancel", { method: "POST" });
   }
   conversationActivationPromise = null;
-  activeView.value = "chat";
   activeSessionId.value = "";
   sending.value = false;
   loadingConversation.value = false;
@@ -279,7 +304,6 @@ async function loadConversation(sessionId: string) {
     void fetch("/api/chat/cancel", { method: "POST" });
   }
   loadingConversation.value = true;
-  activeView.value = "chat";
   sending.value = false;
   activityEvents.value = [];
   activeSessionId.value = sessionId;
@@ -1255,6 +1279,9 @@ function setupShellMotion() {
 watch(autoRefresh, startTimer);
 
 onMounted(() => {
+  compactLayoutMedia = window.matchMedia("(max-width: 900px)");
+  syncCompactLayout();
+  compactLayoutMedia.addEventListener("change", syncCompactLayout);
   setupShellMotion();
   loadDashboard();
   startTimer();
@@ -1262,6 +1289,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.clearInterval(timer);
+  compactLayoutMedia?.removeEventListener("change", syncCompactLayout);
   shellMotion?.revert();
 });
 </script>

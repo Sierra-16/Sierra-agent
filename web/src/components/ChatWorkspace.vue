@@ -1,25 +1,55 @@
 <template>
   <section ref="workspaceRef" class="chat-workspace">
     <header class="chat-statusbar">
-      <button class="connection-chip" type="button" :disabled="loading" @click="$emit('refresh')">
-        <span class="status-dot" :class="{ stale: error }"></span>
-        <span>{{ error ? "连接异常" : "Sierra 在线" }}</span>
-      </button>
+      <div class="agent-presence">
+        <button
+          class="mobile-nav-toggle"
+          type="button"
+          aria-label="打开会话列表"
+          @click="$emit('open-navigation')"
+        >
+          <Menu :size="19" aria-hidden="true" />
+        </button>
+        <img
+          src="/brand/sierra-avatar.png?v=transparent-1"
+          alt=""
+          width="34"
+          height="34"
+        />
+        <span>
+          <strong translate="no">Sierra</strong>
+          <small>
+            <i class="status-dot" :class="{ stale: error }" aria-hidden="true"></i>
+            {{ error ? "连接异常" : "在线" }}
+          </small>
+        </span>
+      </div>
 
       <div class="runtime-strip">
-        <span class="model-chip" :title="activeModelLabel">{{ activeModelLabel }}</span>
+        <span class="model-chip" :title="activeModelLabel" translate="no">{{ activeModelLabel }}</span>
         <span
           class="usage-orb"
           :style="{ '--pct': `${usagePercent}%` }"
+          role="img"
+          :aria-label="`当前会话窗口占用 ${usagePercent.toFixed(0)}%`"
           :title="`当前会话窗口占用 ${usagePercent.toFixed(0)}%`"
         ></span>
+        <button
+          class="refresh-status"
+          type="button"
+          :disabled="loading"
+          aria-label="刷新 Sierra 状态"
+          @click="$emit('refresh')"
+        >
+          <RefreshCw :size="15" aria-hidden="true" />
+        </button>
       </div>
     </header>
 
     <div ref="scrollEl" class="thread-scroll">
       <div class="thread-inner">
         <div v-if="messages.length === 0" class="empty-hero">
-          <h3>今天要让 Sierra 做什么？</h3>
+          <h2>今天要让 Sierra 做什么？</h2>
         </div>
 
         <div
@@ -41,6 +71,8 @@
               class="message-avatar"
               src="/brand/sierra-avatar.png?v=transparent-1"
               alt="Sierra"
+              width="38"
+              height="38"
             />
             <div v-else class="message-avatar user-avatar">
               <UserRound :size="18" />
@@ -65,6 +97,8 @@
                         <img
                           :src="attachment.url"
                           alt=""
+                          width="640"
+                          height="360"
                           loading="lazy"
                           @load="animateAttachmentLoad"
                         />
@@ -101,45 +135,54 @@
     </div>
 
     <section class="composer-dock" :class="{ active: showActivity || completionOpen }">
-      <div v-if="showProcessPanel && activeActivity" class="process-panel" :class="processClasses">
-        <SierraOrnaments variant="process" :active="activeActivity.status === 'active'" />
-
-        <div class="process-portrait">
-          <span
-            class="thinking-sprite hero"
-            :class="activeActivity.status === 'done' ? 'done' : 'active'"
-          ></span>
-          <span class="process-glow"></span>
-        </div>
-
-        <div class="process-main">
-          <div class="process-kicker">
-            <component :is="activeActivityIcon" :size="14" />
-            <span>{{ processKicker }}</span>
-          </div>
-          <div class="process-title-row">
-            <h4>{{ processTitle }}</h4>
-            <code v-if="activeActivity.toolName">{{ activeActivity.toolName }}</code>
-          </div>
-          <p v-if="processDetail">{{ processDetail }}</p>
-
-          <div class="process-phases" aria-label="Sierra 当前处理阶段">
+      <div
+        v-if="showProcessPanel && activeActivity"
+        class="process-panel"
+        :class="processClasses"
+        aria-live="polite"
+      >
+        <header class="process-summary">
+          <div class="process-portrait" aria-hidden="true">
             <span
-              v-for="phase in activityPhases"
-              :key="phase.key"
-              class="process-phase"
-              :class="{ active: phase.active, done: phase.done }"
-            >
-              <component :is="phase.icon" :size="12" />
-              {{ phase.label }}
-            </span>
+              class="thinking-sprite hero"
+              :class="activeActivity.status === 'done' ? 'done' : 'active'"
+            ></span>
           </div>
-        </div>
 
-        <div class="process-side">
-          <span class="process-gem"></span>
-          <strong>{{ processStatusText }}</strong>
-          <small>{{ processSideText }}</small>
+          <div class="process-main">
+            <div class="process-kicker">
+              <component :is="activeActivityIcon" :size="14" aria-hidden="true" />
+              <span>{{ processKicker }}</span>
+            </div>
+            <div class="process-title-row">
+              <h2>{{ processTitle }}</h2>
+              <code v-if="activeActivity.toolName" translate="no">{{ activeActivity.toolName }}</code>
+            </div>
+            <p v-if="processDetail">{{ processDetail }}</p>
+          </div>
+
+          <span class="process-state" :class="activeActivity.status">
+            <span
+              v-if="activeActivity.status === 'active' || activeActivity.status === 'muted'"
+              class="status-spinner"
+              aria-hidden="true"
+            ></span>
+            <Check v-else-if="activeActivity.status === 'done'" :size="15" aria-hidden="true" />
+            <AlertTriangle v-else-if="activeActivity.status === 'error'" :size="15" aria-hidden="true" />
+            {{ processStatusText }}
+          </span>
+        </header>
+
+        <div class="process-phases" aria-label="Sierra 当前处理阶段">
+          <span
+            v-for="phase in activityPhases"
+            :key="phase.key"
+            class="process-phase"
+            :class="{ active: phase.active, done: phase.done }"
+          >
+            <component :is="phase.icon" :size="12" aria-hidden="true" />
+            {{ phase.label }}
+          </span>
         </div>
 
         <TransitionGroup
@@ -155,7 +198,7 @@
             :class="[event.type, event.status, riskClass(event)]"
           >
             <span class="process-feed-icon">
-              <component :is="iconFor(event)" :size="15" />
+              <component :is="iconFor(event)" :size="15" aria-hidden="true" />
             </span>
 
             <div class="process-feed-main">
@@ -217,7 +260,14 @@
               </button>
             </div>
             <form v-if="activeActivity.allowFreeText" class="input-inline" @submit.prevent="submitInputText(activeActivity)">
-              <input v-model="freeText[activeActivity.id]" type="text" placeholder="补充一句..." />
+              <input
+                v-model="freeText[activeActivity.id]"
+                name="process-reply"
+                type="text"
+                autocomplete="off"
+                aria-label="补充信息"
+                placeholder="补充一句…"
+              />
               <button type="submit">发送</button>
             </form>
             <button class="approval-button deny" type="button" @click="cancelInput(activeActivity)">
@@ -238,7 +288,14 @@
             @click="openImagePreview(attachment)"
           >
             <span class="draft-attachment-thumb">
-              <img :src="attachment.url" alt="" loading="lazy" @load="animateAttachmentLoad" />
+              <img
+                :src="attachment.url"
+                alt=""
+                width="96"
+                height="64"
+                loading="lazy"
+                @load="animateAttachmentLoad"
+              />
             </span>
           </button>
           <a
@@ -269,46 +326,82 @@
       </div>
 
       <div class="composer-tools">
-        <button
-          type="button"
-          class="composer-tool-button plan-mode-toggle composer-plan-toggle"
-          :class="{ active: planMode }"
-          :disabled="sending || loading || planModeLoading"
-          :aria-pressed="planMode"
-          :title="planMode ? 'Plan Mode 已开启：Sierra 只规划和读取' : '开启 Plan Mode：先规划，不执行修改'"
-          @click="$emit('toggle-plan-mode')"
-        >
-          <ScrollText :size="15" />
-          <span>{{ planModeLoading ? "切换中" : planMode ? "计划模式" : "Plan Mode" }}</span>
-        </button>
-        <button type="button" class="composer-tool-button" title="引用文件" @click="insertReferencePrefix('@file:')">
-          <FileText :size="15" />
-          <span>文件</span>
-        </button>
-        <button type="button" class="composer-tool-button" title="引用文件夹" @click="insertReferencePrefix('@folder:')">
-          <Folder :size="15" />
-          <span>文件夹</span>
-        </button>
-        <button type="button" class="composer-tool-button" title="引用 Git diff" @click="insertToken('@diff ')">
-          <GitBranch :size="15" />
-          <span>Diff</span>
-        </button>
-        <button type="button" class="composer-tool-button" title="引用网页" @click="insertReferencePrefix('@url:')">
-          <Link2 :size="15" />
-          <span>URL</span>
-        </button>
-        <button type="button" class="composer-tool-button" title="上传文件" :disabled="uploading" @click="triggerUpload">
-          <Upload :size="15" />
-          <span>{{ uploading ? "上传中" : "上传" }}</span>
-        </button>
+        <div class="composer-mode-group">
+          <button
+            type="button"
+            class="composer-tool-button plan-mode-toggle composer-plan-toggle"
+            :class="{ active: planMode }"
+            :disabled="sending || loading || planModeLoading"
+            :aria-pressed="planMode"
+            :title="planMode ? 'Plan Mode 已开启：Sierra 只规划和读取' : '开启 Plan Mode：先规划，不执行修改'"
+            @click="$emit('toggle-plan-mode')"
+          >
+            <ScrollText :size="15" aria-hidden="true" />
+            <span>{{ planModeLoading ? "切换中…" : planMode ? "计划模式" : "Plan Mode" }}</span>
+          </button>
+        </div>
+        <div class="composer-reference-tools" aria-label="添加上下文">
+          <button
+            type="button"
+            class="composer-tool-button"
+            aria-label="引用文件"
+            title="引用文件"
+            @click="insertReferencePrefix('@file:')"
+          >
+            <FileText :size="15" aria-hidden="true" />
+            <span>文件</span>
+          </button>
+          <button
+            type="button"
+            class="composer-tool-button"
+            aria-label="引用文件夹"
+            title="引用文件夹"
+            @click="insertReferencePrefix('@folder:')"
+          >
+            <Folder :size="15" aria-hidden="true" />
+            <span>文件夹</span>
+          </button>
+          <button
+            type="button"
+            class="composer-tool-button"
+            aria-label="引用 Git Diff"
+            title="引用 Git Diff"
+            @click="insertToken('@diff ')"
+          >
+            <GitBranch :size="15" aria-hidden="true" />
+            <span>Diff</span>
+          </button>
+          <button
+            type="button"
+            class="composer-tool-button"
+            aria-label="引用网页"
+            title="引用网页"
+            @click="insertReferencePrefix('@url:')"
+          >
+            <Link2 :size="15" aria-hidden="true" />
+            <span>URL</span>
+          </button>
+          <button
+            type="button"
+            class="composer-tool-button"
+            aria-label="上传文件"
+            title="上传文件"
+            :disabled="uploading"
+            @click="triggerUpload"
+          >
+            <Upload :size="15" aria-hidden="true" />
+            <span>{{ uploading ? "上传中…" : "上传" }}</span>
+          </button>
+        </div>
         <input
           ref="fileInputRef"
           class="upload-input"
           type="file"
+          aria-label="选择要上传的文件"
           accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.rtf,.txt,.md,.json,.csv"
           @change="handleUploadFile"
         />
-        <span v-if="uploadState" class="upload-state">{{ uploadState }}</span>
+        <span v-if="uploadState" class="upload-state" aria-live="polite">{{ uploadState }}</span>
         <span class="composer-hint">
           <kbd>/</kbd> 命令 · <kbd>@</kbd> 引用上下文
         </span>
@@ -323,7 +416,7 @@
       >
         <div class="completion-head">
           <span>{{ completionMode === "slash" ? "命令" : "上下文引用" }}</span>
-          <small>{{ referenceLoading ? "搜索中..." : "↑↓ 选择 · Enter 插入 · Esc 关闭" }}</small>
+          <small>{{ referenceLoading ? "搜索中…" : "↑↓ 选择 · Enter 插入 · Esc 关闭" }}</small>
         </div>
         <div v-if="completionItems.length" ref="completionListRef" class="completion-list" @wheel.stop>
           <button
@@ -355,7 +448,10 @@
         <textarea
           ref="textareaRef"
           v-model="draft"
-          placeholder="输入消息，或 /help 查看命令..."
+          name="message"
+          aria-label="给 Sierra 发送消息"
+          autocomplete="off"
+          placeholder="输入消息，或 /help 查看命令…"
           rows="1"
           @blur="deferCloseCompletion"
           @click="updateCompletion"
@@ -367,14 +463,15 @@
           v-if="sending"
           class="stop-button"
           type="button"
+          aria-label="停止当前处理"
           title="停止当前处理"
           @click="$emit('cancel-chat')"
         >
-          <Square :size="15" />
+          <Square :size="15" aria-hidden="true" />
           停止
         </button>
         <button class="send-button" type="submit" :disabled="sending || !draft.trim()">
-          <Send :size="17" />
+          <Send :size="17" aria-hidden="true" />
           发送
         </button>
       </form>
@@ -395,7 +492,7 @@
           <X :size="18" />
         </button>
         <div class="image-preview-stage">
-          <img :src="previewImage.url" alt="" />
+          <img :src="previewImage.url" alt="" width="1280" height="960" />
         </div>
       </div>
     </Teleport>
@@ -413,7 +510,9 @@ import {
   GitBranch,
   History,
   Link2,
+  Menu,
   MessageCircleQuestion,
+  RefreshCw,
   ScrollText,
   Send,
   ShieldAlert,
@@ -428,7 +527,6 @@ import {
 import { gsap } from "gsap";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ChatActivityEvent, ChatMessage } from "../types";
-import SierraOrnaments from "./SierraOrnaments.vue";
 
 type CompletionMode = "slash" | "reference";
 
@@ -465,13 +563,13 @@ const props = defineProps<{
   planModeLoading: boolean;
   sending: boolean;
   usagePercent: number;
-  workspace?: string;
 }>();
 
 const emit = defineEmits<{
   (event: "refresh"): void;
   (event: "send", value: string): void;
   (event: "cancel-chat"): void;
+  (event: "open-navigation"): void;
   (event: "toggle-plan-mode"): void;
   (event: "approve-tool", id: string, decision: "once" | "session" | "deny"): void;
   (
@@ -489,7 +587,8 @@ const INTERACTIVE_SELECTOR = [
   ".composer-tool-button",
   ".send-button",
   ".stop-button",
-  ".connection-chip",
+  ".refresh-status",
+  ".mobile-nav-toggle",
   ".plan-mode-toggle",
   ".completion-item",
   ".approval-button",
@@ -723,34 +822,6 @@ const processStatusText = computed(() => {
   }
   return "进行中";
 });
-const processSideText = computed(() => {
-  const event = activeActivity.value;
-  if (event?.type === "command") {
-    return "命令";
-  }
-  if (!event) {
-    return "处理中";
-  }
-  if (event.type === "approval") {
-    return "等你确认";
-  }
-  if (event.type === "user-input") {
-    return "等你回复";
-  }
-  if (event.type === "tool") {
-    return "工具调用";
-  }
-  if (event.type === "memory") {
-    return "记忆维护";
-  }
-  if (event.type === "context" || event.type === "reference") {
-    return "上下文";
-  }
-  if (event.type === "thinking" && recentUserImageReference.value) {
-    return "看图";
-  }
-  return "思考";
-});
 const activityPhases = computed(() => {
   const events = visibleActivityEvents.value;
   const phaseState = (types: string[]) => {
@@ -981,7 +1052,7 @@ async function handleUploadFile(event: Event) {
   }
 
   uploading.value = true;
-  uploadState.value = `上传 ${file.name}...`;
+  uploadState.value = `上传 ${file.name}…`;
   try {
     const contentBase64 = await fileToBase64(file);
     const response = await fetch("/api/uploads", {
@@ -1426,7 +1497,7 @@ function setupMotion() {
       return;
     }
     const intro = gsap.timeline({ defaults: { ease: "power3.out" } });
-    const emptyHeroTitle = workspaceRef.value?.querySelector<HTMLElement>(".empty-hero h3");
+    const emptyHeroTitle = workspaceRef.value?.querySelector<HTMLElement>(".empty-hero h2");
     gsap.set([".chat-statusbar", ".composer-dock"], { willChange: "transform, opacity" });
     gsap.set(".usage-orb", { willChange: "transform" });
     intro
