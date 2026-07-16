@@ -407,74 +407,76 @@
         </span>
       </div>
 
-      <div
-        v-if="completionOpen"
-        class="completion-popover"
-        tabindex="-1"
-        @keydown="handleCompletionKeydown"
-        @wheel.stop
-      >
-        <div class="completion-head">
-          <span>{{ completionMode === "slash" ? "命令" : "上下文引用" }}</span>
-          <small>{{ referenceLoading ? "搜索中…" : "↑↓ 选择 · Enter 插入 · Esc 关闭" }}</small>
-        </div>
-        <div v-if="completionItems.length" ref="completionListRef" class="completion-list" @wheel.stop>
-          <button
-            v-for="(item, index) in completionItems"
-            :key="`${item.kind}:${item.value}:${index}`"
-            type="button"
-            class="completion-item"
-            :class="{ active: index === selectedCompletionIndex }"
-            @mousedown.prevent="applyCompletion(item)"
-            @mouseenter="selectCompletion(index)"
-            @keydown.stop="handleCompletionKeydown"
-          >
-            <span class="completion-glyph">
-              <component :is="completionIcon(item)" :size="16" />
-            </span>
-            <span class="completion-copy">
-              <strong>{{ item.label }}</strong>
-              <small>{{ item.detail }}</small>
-            </span>
-            <kbd v-if="index === selectedCompletionIndex">Enter</kbd>
-          </button>
-        </div>
-        <div v-else class="completion-empty">
-          没找到匹配项。你也可以继续手动输入。
-        </div>
-      </div>
-
-      <form class="composer-bar" @submit.prevent="submitDraft">
-        <textarea
-          ref="textareaRef"
-          v-model="draft"
-          name="message"
-          aria-label="给 Sierra 发送消息"
-          autocomplete="off"
-          placeholder="输入消息，或 /help 查看命令…"
-          rows="1"
-          @blur="deferCloseCompletion"
-          @click="updateCompletion"
-          @input="onDraftInput"
-          @keydown="handleKeydown"
-          @keyup="handleKeyup"
-        ></textarea>
-        <button
-          v-if="sending"
-          class="stop-button"
-          type="button"
-          aria-label="停止当前处理"
-          title="停止当前处理"
-          @click="$emit('cancel-chat')"
+      <div class="composer-entry">
+        <div
+          v-if="completionOpen"
+          class="completion-popover"
+          tabindex="-1"
+          @keydown="handleCompletionKeydown"
+          @wheel.stop
         >
-          <Square :size="15" aria-hidden="true" />
-          停止
-        </button>
-        <button class="send-button" type="submit" :disabled="sending || !draft.trim()">
-          <Send :size="17" aria-hidden="true" />
-          发送
-        </button>
-      </form>
+          <div class="completion-head">
+            <span>{{ completionMode === "slash" ? "命令" : "上下文引用" }}</span>
+            <small>{{ referenceLoading ? "搜索中…" : "↑↓ 选择 · Enter 插入 · Esc 关闭" }}</small>
+          </div>
+          <div v-if="completionItems.length" ref="completionListRef" class="completion-list" @wheel.stop>
+            <button
+              v-for="(item, index) in completionItems"
+              :key="`${item.kind}:${item.value}:${index}`"
+              type="button"
+              class="completion-item"
+              :class="{ active: index === selectedCompletionIndex }"
+              @mousedown.prevent="applyCompletion(item)"
+              @mouseenter="selectCompletion(index)"
+              @keydown.stop="handleCompletionKeydown"
+            >
+              <span class="completion-glyph">
+                <component :is="completionIcon(item)" :size="16" aria-hidden="true" />
+              </span>
+              <span class="completion-copy">
+                <strong>{{ item.label }}</strong>
+                <small>{{ item.detail }}</small>
+              </span>
+              <kbd v-if="index === selectedCompletionIndex">Enter</kbd>
+            </button>
+          </div>
+          <div v-else class="completion-empty">
+            没找到匹配项。你也可以继续手动输入。
+          </div>
+        </div>
+
+        <form class="composer-bar" @submit.prevent="submitDraft">
+          <textarea
+            ref="textareaRef"
+            v-model="draft"
+            name="message"
+            aria-label="给 Sierra 发送消息"
+            autocomplete="off"
+            placeholder="输入消息，或 /help 查看命令…"
+            rows="1"
+            @blur="deferCloseCompletion"
+            @click="updateCompletion"
+            @input="onDraftInput"
+            @keydown="handleKeydown"
+            @keyup="handleKeyup"
+          ></textarea>
+          <button
+            v-if="sending"
+            class="stop-button"
+            type="button"
+            aria-label="停止当前处理"
+            title="停止当前处理"
+            @click="$emit('cancel-chat')"
+          >
+            <Square :size="15" aria-hidden="true" />
+            停止
+          </button>
+          <button class="send-button" type="submit" :disabled="sending || !draft.trim()">
+            <Send :size="17" aria-hidden="true" />
+            发送
+          </button>
+        </form>
+      </div>
     </section>
 
     <Teleport to="body">

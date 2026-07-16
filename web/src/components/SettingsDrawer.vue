@@ -6,6 +6,7 @@
         <aside
           ref="settingsDrawerRef"
           class="settings-drawer"
+          tabindex="-1"
           role="dialog"
           aria-modal="true"
           aria-label="Sierra 设置"
@@ -818,7 +819,7 @@ import {
   X
 } from "lucide-vue-next";
 import { gsap } from "gsap";
-import { computed, defineComponent, h, nextTick, onUnmounted, ref, watch } from "vue";
+import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import type { DashboardPayload } from "../types";
 
@@ -861,6 +862,7 @@ const emit = defineEmits<{
 const activeSection = ref<SettingsSection>("model");
 const settingsDrawerRef = ref<HTMLElement | null>(null);
 let settingsTimeline: ReturnType<typeof gsap.timeline> | undefined;
+let previouslyFocusedElement: HTMLElement | null = null;
 const cronMinutes = ref(60);
 const cronPrompt = ref("");
 const memoryQuery = ref("");
@@ -1344,10 +1346,16 @@ async function animateSettingsSection() {
 
 watch(
   () => props.open,
-  (open) => {
+  async (open) => {
     if (open) {
+      previouslyFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       loadModelConfig();
       loadMcpConfig();
+      await nextTick();
+      settingsDrawerRef.value?.focus({ preventScroll: true });
+    } else {
+      previouslyFocusedElement?.focus({ preventScroll: true });
+      previouslyFocusedElement = null;
     }
   },
   { immediate: true }
@@ -1361,7 +1369,20 @@ watch(models, () => {
 
 watch(activeSection, animateSettingsSection, { flush: "post" });
 
+function handleSettingsKeydown(event: KeyboardEvent) {
+  if (!props.open || event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  emit("close");
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", handleSettingsKeydown);
+});
+
 onUnmounted(() => {
+  window.removeEventListener("keydown", handleSettingsKeydown);
   settingsTimeline?.kill();
   if (settingsDrawerRef.value) {
     gsap.killTweensOf(settingsDrawerRef.value.querySelectorAll("*"));

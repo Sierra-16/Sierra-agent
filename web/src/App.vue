@@ -1238,15 +1238,18 @@ function setupShellMotion() {
   shellMotion = gsap.matchMedia();
   shellMotion.add(
     {
-      compact: "(max-width: 860px)",
+      compact: "(max-width: 900px)",
       reduceMotion: "(prefers-reduced-motion: reduce)"
     },
     (context) => {
       const conditions = context.conditions as { compact: boolean; reduceMotion: boolean };
-      if (conditions.reduceMotion) {
+      if (conditions.reduceMotion || conditions.compact) {
+        gsap.set([".sidebar-shell", ".main-shell"], {
+          clearProps: "transform,opacity,visibility,willChange"
+        });
         return;
       }
-      const distance = conditions.compact ? 10 : 18;
+      const distance = 18;
       const timeline = gsap.timeline({
         defaults: { ease: "power3.out" }
       });

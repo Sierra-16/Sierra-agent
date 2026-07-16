@@ -34,7 +34,6 @@
     <button class="primary-action" type="button" @click="openNewChat">
       <Plus :size="17" aria-hidden="true" />
       <span>新会话</span>
-      <kbd aria-hidden="true">Ctrl N</kbd>
     </button>
 
     <section class="session-stack" aria-labelledby="session-list-title">
@@ -209,7 +208,7 @@ function setupSidebarMotion() {
   sidebarMotion = gsap.matchMedia();
   sidebarMotion.add(
     {
-      compact: "(max-width: 860px)",
+      compact: "(max-width: 900px)",
       reduceMotion: "(prefers-reduced-motion: reduce)"
     },
     (context) => {
@@ -284,32 +283,6 @@ async function animateActiveSession() {
   );
 }
 
-async function animateMobileDrawer() {
-  await nextTick();
-  const sidebar = sidebarRef.value;
-  if (!sidebar) {
-    return;
-  }
-  if (!props.compactLayout) {
-    gsap.set(sidebar, { clearProps: "transform,opacity,visibility" });
-    return;
-  }
-  if (prefersReducedMotion()) {
-    gsap.set(sidebar, {
-      xPercent: props.mobileOpen ? 0 : -104,
-      autoAlpha: props.mobileOpen ? 1 : 0
-    });
-    return;
-  }
-  gsap.to(sidebar, {
-    xPercent: props.mobileOpen ? 0 : -104,
-    autoAlpha: props.mobileOpen ? 1 : 0,
-    duration: props.mobileOpen ? 0.34 : 0.24,
-    ease: props.mobileOpen ? "power3.out" : "power2.in",
-    overwrite: "auto"
-  });
-}
-
 function sessionTitle(session: SessionSummary) {
   return String(session.title || "未命名会话");
 }
@@ -365,12 +338,6 @@ watch(
 );
 
 watch(() => props.activeSessionId, animateActiveSession, { flush: "post" });
-watch(
-  () => [props.mobileOpen, props.compactLayout],
-  animateMobileDrawer,
-  { flush: "post", immediate: true }
-);
-
 onMounted(() => {
   setupSidebarMotion();
   animateNewSessions();
