@@ -14,6 +14,7 @@
       :error="error"
       :loading="loading"
       :mobile-open="sidebarOpen"
+      :new-chat-loading="newConversationLoading"
       :payload="payload"
       :recent-sessions="recentSessions"
       @delete-session="deleteSession"
@@ -97,6 +98,7 @@ const loading = ref(false);
 const sending = ref(false);
 const planModeLoading = ref(false);
 const loadingConversation = ref(false);
+const newConversationLoading = ref(false);
 const error = ref("");
 const autoRefresh = ref(true);
 const activeSessionId = ref("");
@@ -263,33 +265,54 @@ async function activateConversation(sessionId: string, requestId: number) {
 }
 
 async function startLocalChat() {
+  if (newConversationLoading.value) {
+    return;
+  }
+  newConversationLoading.value = true;
   conversationLoadSeq += 1;
   chatRunSeq += 1;
   activeChatAbortController?.abort();
   if (sending.value) {
     void fetch("/api/chat/cancel", { method: "POST" });
   }
+  const pendingActivation = conversationActivationPromise;
   conversationActivationPromise = null;
-  activeSessionId.value = "";
   sending.value = false;
   loadingConversation.value = false;
   activityEvents.value = [];
   try {
-    await runCommandPayload({ command: "new", text: "/new" }, { appendUser: false, appendResult: false });
-  } catch {
-    try {
-      await fetch("/api/conversations/new", { method: "POST" });
-    } catch {
-      // 页面仍可继续使用。
+    if (pendingActivation) {
+      await pendingActivation;
     }
+    const response = await fetch("/api/conversations/new", { method: "POST" });
+    const data = await response.json();
+    if (!response.ok || data.ok === false) {
+      throw new Error(data.error || `New conversation API ${response.status}`);
+    }
+    activeSessionId.value = "";
+    applyUsageSnapshot(data.usage);
+    if (payload.value && data.conversation) {
+      payload.value = {
+        ...payload.value,
+        conversation: {
+          ...payload.value.conversation,
+          ...data.conversation
+        }
+      };
+    }
+    chatMessages.value = [
+      {
+        id: newId(),
+        role: "assistant",
+        text: "新会话开好了。哼，说吧，今天要让 Sierra 做什么？"
+      }
+    ];
+    error.value = "";
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    newConversationLoading.value = false;
   }
-  chatMessages.value = [
-    {
-      id: newId(),
-      role: "assistant",
-      text: "新会话开好了。哼，说吧，今天要让 Sierra 做什么？"
-    }
-  ];
 }
 
 async function loadConversation(sessionId: string) {
@@ -525,6 +548,9 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
       });
     }
     await loadDashboard({ bootstrap: false });
+    if (chatRequestId === chatRunSeq) {
+      activeSessionId.value = String(payload.value?.conversation.id || "");
+    }
   } catch (err) {
     if (chatRequestId !== chatRunSeq) {
       return;

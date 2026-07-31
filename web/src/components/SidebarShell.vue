@@ -31,9 +31,16 @@
       </button>
     </header>
 
-    <button class="primary-action" type="button" @click="openNewChat">
-      <Plus :size="17" aria-hidden="true" />
-      <span>新会话</span>
+    <button
+      class="primary-action"
+      type="button"
+      :disabled="newChatLoading"
+      :aria-busy="newChatLoading"
+      @click="openNewChat"
+    >
+      <LoaderCircle v-if="newChatLoading" class="new-chat-spinner" :size="17" aria-hidden="true" />
+      <Plus v-else :size="17" aria-hidden="true" />
+      <span>{{ newChatLoading ? "正在开启…" : "新会话" }}</span>
     </button>
 
     <section class="session-stack" aria-labelledby="session-list-title">
@@ -147,6 +154,7 @@
 import {
   Check,
   ChevronRight,
+  LoaderCircle,
   MessageCircle,
   PanelLeftClose,
   Pencil,
@@ -168,6 +176,7 @@ const props = defineProps<{
   error: string;
   loading: boolean;
   mobileOpen: boolean;
+  newChatLoading: boolean;
   payload: DashboardPayload | null;
   recentSessions: SessionSummary[];
 }>();

@@ -579,9 +579,11 @@ def create_dashboard_app(
             app.state.gateway.agent.conv_id = None
             usage = app.state.gateway.agent.usage_snapshot()
         return {
+            "ok": True,
             "id": None,
             "messages": [],
             "usage": _usage(usage if isinstance(usage, dict) else {}),
+            "conversation": _conversation(app.state.gateway.agent),
         }
 
     dist_dir = Path(static_dir) if static_dir is not None else root_dir / "web" / "dist"

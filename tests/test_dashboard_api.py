@@ -733,7 +733,11 @@ class DashboardApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertIsNone(payload["id"])
         self.assertEqual(payload["messages"], [])
+        self.assertIsNone(payload["conversation"]["id"])
+        self.assertEqual(payload["conversation"]["message_count"], 0)
 
     def test_conversation_preview_does_not_activate_agent(self):
         with tempfile.TemporaryDirectory() as temp_dir:
