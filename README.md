@@ -1,4 +1,5 @@
 # Sierra
+<img width="1402" height="1122" alt="ChatGPT Image 2026年6月25日 15_04_41" src="https://github.com/user-attachments/assets/922dfc9a-4a55-47cf-87e4-6e7242c340f6" />
 Sierra 是一个陪伴型工作智能体。她会记住你的习惯，陪你讨论想法，也能在获得允许后亲自使用工具把事情做完。
 
 当前版本主要运行在 Windows，提供 TUI 和 Web UI，仍处于活跃开发阶段。
