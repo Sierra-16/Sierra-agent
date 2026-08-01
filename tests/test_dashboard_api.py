@@ -184,6 +184,24 @@ class StoreBackedFakeAgent(FakeAgent):
         self.conv_id = conv_id
         self.messages, _usage = self.store.load(conv_id)
 
+    def reset(self):
+        self.messages = []
+
+    def ensure_conversation_id(self):
+        if not self.conv_id:
+            self.conv_id = self.store.new_id()
+        return self.conv_id
+
+    def save_conversation(self, usage, title=""):
+        self.ensure_conversation_id()
+        self.store.save(self.conv_id, self.messages, usage, title)
+
+    def checkpoint_conversation(self):
+        if not self.messages:
+            return False
+        self.save_conversation(self.usage_snapshot(), "active")
+        return True
+
     def list_conversations(self):
         return self.store.list_all()
 
@@ -773,23 +791,29 @@ class DashboardApiTest(unittest.TestCase):
         self.assertEqual(payload["messages"][0]["text"], "loaded hello")
 
     def test_new_conversation_endpoint_resets_agent(self):
-        app = create_dashboard_app(
-            FakeAgent(),
-            config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
-            sierra_dir=".",
-            static_dir="missing-dist",
-        )
-        client = TestClient(app)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ConversationStore(storage_dir=temp_dir)
+            agent = StoreBackedFakeAgent(store)
+            app = create_dashboard_app(
+                agent,
+                config={"active_model": "test", "models": {"test": {"name": "test-model"}}},
+                sierra_dir=".",
+                static_dir="missing-dist",
+            )
+            client = TestClient(app)
 
-        response = client.post("/api/conversations/new")
+            response = client.post("/api/conversations/new")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertTrue(payload["ok"])
-        self.assertIsNone(payload["id"])
+        self.assertTrue(payload["id"])
         self.assertEqual(payload["messages"], [])
-        self.assertIsNone(payload["conversation"]["id"])
+        self.assertIn("Sierra", payload["greeting"])
+        self.assertEqual(payload["conversation"]["id"], payload["id"])
         self.assertEqual(payload["conversation"]["message_count"], 0)
+        self.assertEqual(payload["conversation"]["recent"][0]["id"], payload["id"])
+        self.assertEqual(payload["conversation"]["recent"][0]["title"], "新会话")
 
     def test_conversation_preview_does_not_activate_agent(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -289,7 +289,7 @@ async function startLocalChat() {
     if (!response.ok || data.ok === false) {
       throw new Error(data.error || `New conversation API ${response.status}`);
     }
-    activeSessionId.value = "";
+    activeSessionId.value = String(data.id || data.conversation?.id || "");
     applyUsageSnapshot(data.usage);
     if (payload.value && data.conversation) {
       payload.value = {
@@ -304,7 +304,7 @@ async function startLocalChat() {
       {
         id: newId(),
         role: "assistant",
-        text: "新会话开好了。哼，说吧，今天要让 Sierra 做什么？"
+        text: String(data.greeting || "新会话开好了。哼，说吧，今天要让 Sierra 做什么？")
       }
     ];
     error.value = "";
@@ -494,7 +494,10 @@ async function sendChat(message: string, options: { appendUser?: boolean } = {})
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
+      body: JSON.stringify({
+        message: text,
+        conversation_id: activeSessionId.value || null
+      }),
       signal: controller.signal
     });
     if (!response.ok) {
@@ -702,14 +705,23 @@ async function handleCommandResult(data: any, options: { appendResult: boolean }
     chatMessages.value = mapMessages(data.messages);
   }
   if (data.type === "new") {
+    if (payload.value && data.conversation) {
+      payload.value = {
+        ...payload.value,
+        conversation: {
+          ...payload.value.conversation,
+          ...data.conversation
+        }
+      };
+    }
     chatMessages.value = [
       {
         id: newId(),
         role: "assistant",
-        text: "新会话开好了。哼，说吧。"
+        text: String(data.greeting || "新会话开好了。哼，说吧，今天要让 Sierra 做什么？")
       }
     ];
-    activeSessionId.value = "";
+    activeSessionId.value = String(data.id || data.conversation?.id || "");
     return;
   }
   if (data.type === "session_loaded") {

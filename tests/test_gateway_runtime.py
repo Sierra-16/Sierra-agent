@@ -58,7 +58,33 @@ class StatusAgent(ApprovalAgent):
         return "finished"
 
 
+class ConversationAgent(ApprovalAgent):
+    def __init__(self):
+        super().__init__()
+        self.conv_id = "new-conversation"
+        self.loaded = []
+
+    def load_conversation(self, conversation_id):
+        self.loaded.append(conversation_id)
+        self.conv_id = conversation_id
+        self.messages = [{"role": "user", "content": "older message"}]
+
+    def chat(self, message, on_status=None, on_tool_approval=None, on_user_input=None):
+        self.messages.append({"role": "user", "content": message})
+        return f"conversation:{self.conv_id}"
+
+
 class GatewayRuntimeTests(unittest.TestCase):
+    def test_chat_activates_requested_conversation_before_sending(self):
+        agent = ConversationAgent()
+        runtime = GatewayRuntime(agent)
+
+        result = runtime.chat("continue", conversation_id="old-conversation")
+
+        self.assertEqual(result.answer, "conversation:old-conversation")
+        self.assertEqual(agent.loaded, ["old-conversation"])
+        self.assertEqual(agent.conv_id, "old-conversation")
+
     def test_tool_approval_can_be_released_from_another_adapter_call(self):
         runtime = GatewayRuntime(ApprovalAgent(), id_factory=lambda: "abcdef123456")
         events = []

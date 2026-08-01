@@ -91,6 +91,7 @@ class GatewayRuntime:
         self,
         message: str,
         *,
+        conversation_id: str | None = None,
         emit: GatewayEmit | None = None,
         interaction: str = "interactive",
         input_reader: GatewayInputReader | None = None,
@@ -99,6 +100,7 @@ class GatewayRuntime:
         input_timeout: float = 600.0,
     ) -> GatewayChatResult:
         message = sanitize_text(str(message or "").strip(), max_length=12000)
+        conversation_id = sanitize_text(str(conversation_id or "").strip(), max_length=120)
         emit_safe = self._safe_emitter(emit)
         cancel_event = threading.Event()
 
@@ -156,6 +158,10 @@ class GatewayRuntime:
                 self.active_cancel_event = cancel_event
             try:
                 ensure_not_cancelled()
+                if conversation_id and str(getattr(self._agent, "conv_id", "") or "") != conversation_id:
+                    load_conversation = getattr(self._agent, "load_conversation", None)
+                    if callable(load_conversation):
+                        load_conversation(conversation_id)
                 if suppress_output:
                     with redirect_context[0], redirect_context[1]:
                         answer = self._agent.chat(

@@ -39,10 +39,13 @@ from .tools.registry import BRIDGE_TOOL_NAMES
 
 
 MAX_SKILL_CONTENT_BYTES = 256 * 1024
+NEW_CONVERSATION_TITLE = "新会话"
+NEW_CONVERSATION_GREETING = "新会话开好了。哼，说吧，今天要让 Sierra 做什么？"
 
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12000)
+    conversation_id: str | None = Field(default=None, max_length=120)
 
 
 class ToolApprovalRequest(BaseModel):
@@ -350,6 +353,7 @@ def create_dashboard_app(
         events: list[dict[str, Any]] = []
         result = app.state.gateway.chat(
             message,
+            conversation_id=_safe_conversation_id(request.conversation_id),
             emit=events.append,
             interaction="deny",
             suppress_output=True,
@@ -373,6 +377,7 @@ def create_dashboard_app(
             try:
                 result = app.state.gateway.chat(
                     message,
+                    conversation_id=_safe_conversation_id(request.conversation_id),
                     emit=emit,
                     interaction="interactive",
                     suppress_output=True,
@@ -576,17 +581,11 @@ def create_dashboard_app(
     @app.post("/api/conversations/new")
     def new_conversation() -> dict[str, Any]:
         with app.state.chat_lock:
-            if hasattr(app.state.gateway.agent, "checkpoint_conversation"):
-                app.state.gateway.agent.checkpoint_conversation()
-            app.state.gateway.agent.reset()
-            app.state.gateway.agent.conv_id = None
-            usage = app.state.gateway.agent.usage_snapshot()
+            state = _begin_new_conversation(app.state.gateway.agent)
         return {
             "ok": True,
-            "id": None,
             "messages": [],
-            "usage": _usage(usage if isinstance(usage, dict) else {}),
-            "conversation": _conversation(app.state.gateway.agent),
+            **state,
         }
 
     dist_dir = Path(static_dir) if static_dir is not None else root_dir / "web" / "dist"
@@ -693,18 +692,13 @@ def _execute_dashboard_command(app: FastAPI, request: CommandRequest) -> dict[st
         }
 
     if command in {"new"}:
-        _auto_save_web(agent)
-        _safe_call(agent, "reset", default=None)
-        try:
-            agent.conv_id = None
-        except Exception:
-            pass
+        state = _begin_new_conversation(agent)
         return {
             "ok": True,
             "type": "new",
             "text": "新会话已创建。Sierra 会从这里重新开始。",
             "messages": [],
-            "usage": _usage(_usage_snapshot(agent)),
+            **state,
         }
 
     if command in {"reset"}:
@@ -1040,6 +1034,31 @@ def _auto_save_web(agent: Any) -> None:
             break
     usage = _usage_snapshot(agent)
     _safe_call(agent, "save_conversation", default=None, usage=usage, title=title)
+
+
+def _begin_new_conversation(agent: Any) -> dict[str, Any]:
+    _safe_call(agent, "checkpoint_conversation", default=None)
+    _safe_call(agent, "reset", default=None)
+    try:
+        agent.conv_id = None
+    except Exception:
+        pass
+    conversation_id = _safe_call(agent, "ensure_conversation_id", default=None)
+    usage = _usage_snapshot(agent)
+    if conversation_id:
+        _safe_call(
+            agent,
+            "save_conversation",
+            default=None,
+            usage=usage,
+            title=NEW_CONVERSATION_TITLE,
+        )
+    return {
+        "id": conversation_id,
+        "greeting": NEW_CONVERSATION_GREETING,
+        "usage": _usage(usage),
+        "conversation": _conversation(agent),
+    }
 
 
 def _positive_int(value: Any, fallback_text: str, *, default: int, maximum: int) -> int:
