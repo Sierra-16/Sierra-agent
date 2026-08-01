@@ -1,4 +1,12 @@
 # Sierra
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/FastAPI-0.x-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Vue-3.5-42B883?logo=vuedotjs&logoColor=white" alt="Vue 3.5">
+  <img src="https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.6">
+  <img src="https://img.shields.io/badge/GSAP-3.13-88CE02?logo=greensock&logoColor=white" alt="GSAP 3.13">
+  <img src="https://img.shields.io/badge/version-0.1.0--beta-blue" alt="Version">
+</p>
 <img width="1402" height="1122" alt="ChatGPT Image 2026年6月25日 15_04_41" src="https://github.com/user-attachments/assets/922dfc9a-4a55-47cf-87e4-6e7242c340f6" />
 Sierra 是一个陪伴型工作智能体。她会记住你的习惯，陪你讨论想法，也能在获得允许后亲自使用工具把事情做完。
 
