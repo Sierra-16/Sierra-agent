@@ -358,6 +358,58 @@ class DashboardApiTest(unittest.TestCase):
         self.assertEqual(tool_response.status_code, 200)
         self.assertEqual(tool_response.json()["diagnostics"]["summary"]["total"], 2)
 
+    def test_mcp_diagnostics_matches_config_names_to_sanitized_runtime_names(self):
+        agent = FakeAgent()
+        agent.mcp_status = lambda: {
+            "servers": [
+                {
+                    "name": "mcd_mcp",
+                    "type": "streamablehttp",
+                    "status": "running",
+                    "running": True,
+                    "tools": 29,
+                },
+                {
+                    "name": "amap_maps",
+                    "type": "streamablehttp",
+                    "status": "running",
+                    "running": True,
+                    "tools": 15,
+                },
+            ]
+        }
+        config = {
+            "mcpServers": {
+                "mcd-mcp": {
+                    "type": "streamablehttp",
+                    "url": "https://mcp.example.test",
+                },
+                "amap-maps": {
+                    "type": "streamablehttp",
+                    "url": "https://maps.example.test",
+                },
+            }
+        }
+        app = create_dashboard_app(
+            agent,
+            config=config,
+            sierra_dir=".",
+            static_dir="missing-dist",
+        )
+        client = TestClient(app)
+
+        response = client.get("/api/config/mcp/diagnostics")
+
+        self.assertEqual(response.status_code, 200)
+        diagnostics = response.json()["diagnostics"]
+        self.assertEqual(diagnostics["summary"]["total"], 2)
+        self.assertEqual(diagnostics["summary"]["running"], 2)
+        self.assertEqual(diagnostics["summary"]["tools"], 44)
+        self.assertEqual(
+            [(item["name"], item["status"], item["tools"]) for item in diagnostics["items"]],
+            [("mcd-mcp", "running", 29), ("amap-maps", "running", 15)],
+        )
+
     def test_capabilities_endpoint_returns_unified_status(self):
         app = create_dashboard_app(
             FakeAgent(),

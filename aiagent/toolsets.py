@@ -7,6 +7,70 @@ from typing import Any
 ToolsetDefinition = dict[str, Any]
 
 
+# Hermes keeps an explicit name-based allowlist for tools whose schemas must
+# always be visible.  Classifying by toolset name is too broad: a plugin can
+# register into a familiar category and accidentally become a permanent part
+# of every model request.  Keep this list deliberately limited to Sierra's
+# built-in, generally useful tools; MCP and plugin tools remain discoverable
+# through tool_search.
+SIERRA_CORE_TOOLS = frozenset({
+    "calculator",
+    "get_time",
+    "list_directory",
+    "file_info",
+    "read_file",
+    "read_document",
+    "search_files",
+    "write_file",
+    "patch_file",
+    "delete_path",
+    "move_path",
+    "copy_path",
+    "make_directory",
+    "web_search",
+    "web_fetch",
+    "web_extract",
+    "browser_fetch",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_scroll",
+    "browser_back",
+    "browser_press",
+    "browser_screenshot",
+    "browser_console",
+    "browser_close",
+    "powershell",
+    "terminal",
+    "process",
+    "execute_code",
+    "git_inspect",
+    "project_inspect",
+    "save_memory",
+    "delete_memory",
+    "session_search",
+    "session_load",
+    "skills_list",
+    "skill_view",
+    "skill_render_template",
+    "skill_run_script",
+    "skill_reload",
+    "skill_manage",
+    "skill_usage_stats",
+    "request_user_input",
+    "todo",
+    "update_plan",
+    "get_plan",
+    "resolve_task_execution",
+    "cron_list",
+    "cron_add",
+    "cron_remove",
+    "vision_analyze",
+    "image_generate",
+})
+
+
 TOOLSETS: dict[str, ToolsetDefinition] = {
     "core": {
         "description": "Small always-useful utilities and bridge helpers.",

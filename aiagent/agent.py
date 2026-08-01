@@ -161,9 +161,10 @@ class Agent:
         self.todo_store = TodoStore()
         self.plan_mode_enabled = False
         self.capabilities = None
+        self._tools_config = tools_config if isinstance(tools_config, dict) else {}
         configure_tools = getattr(self.tools, "configure_tools", None)
         if callable(configure_tools):
-            configure_tools(tools_config or {}, context_window=context_window)
+            configure_tools(self._tools_config, context_window=context_window)
         else:
             configure_tool_search = getattr(self.tools, "configure_tool_search", None)
             if callable(configure_tool_search):
@@ -283,6 +284,16 @@ class Agent:
             max_tokens,
             context_config,
         )
+        configure_tool_search = getattr(self.tools, "configure_tool_search", None)
+        if callable(configure_tool_search):
+            # Tool schemas count against Sierra's effective prompt budget, not
+            # merely the provider-advertised model window.  This mirrors
+            # Hermes' active-context threshold while respecting Sierra's
+            # max_prompt_tokens cap.
+            configure_tool_search(
+                self._tools_config,
+                context_window=self.context_window,
+            )
         self.compression_context_window = _resolve_compression_window(
             self.model_context_window,
             context_config,
@@ -551,6 +562,12 @@ class Agent:
             self.context_window,
             max(4096, context_window - output_headroom),
         )
+        configure_tool_search = getattr(self.tools, "configure_tool_search", None)
+        if callable(configure_tool_search):
+            configure_tool_search(
+                self._tools_config,
+                context_window=self.context_window,
+            )
         self._recalculate_compression_budgets()
         return {
             "model_context_window": self.model_context_window,

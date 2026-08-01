@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from ..toolsets import (
+    SIERRA_CORE_TOOLS,
     ToolsetSelection,
     expand_tool_patterns,
     get_all_toolsets,
@@ -26,25 +27,8 @@ TOOL_CALL_NAME = "tool_call"
 BRIDGE_TOOL_NAMES = {TOOL_SEARCH_NAME, TOOL_DESCRIBE_NAME, TOOL_CALL_NAME}
 
 
-CORE_TOOLSETS = {
-    "browser",
-    "code_execution",
-    "core",
-    "cron",
-    "file",
-    "git",
-    "memory",
-    "planning",
-    "project",
-    "session",
-    "skills",
-    "terminal",
-    "vision",
-    "web",
-}
-
-
 CHECK_FN_TTL_SECONDS = 30.0
+CHARS_PER_SCHEMA_TOKEN = 4.0
 
 
 @dataclass
@@ -276,6 +260,33 @@ class ToolRegistry:
             self._tool_describe_definition(),
             self._tool_call_definition(),
         ]
+
+    def tool_search_status(self) -> dict[str, Any]:
+        entries = self._available_entries()
+        direct_entries, deferred_entries = self._partition_entries(entries)
+        deferred_tokens = _estimate_schema_tokens(deferred_entries)
+        direct_tokens = _estimate_schema_tokens(direct_entries)
+        config = self._tool_search_config
+        threshold_tokens = max(
+            1,
+            int(config.context_window * (config.threshold_pct / 100.0)),
+        )
+        active = self._should_activate_tool_search(deferred_entries)
+        bridge_count = 3 if active and deferred_entries else 0
+        return {
+            "enabled": config.enabled,
+            "active": active,
+            "context_budget": config.context_window,
+            "threshold_pct": config.threshold_pct,
+            "threshold_tokens": threshold_tokens,
+            "registered": len(entries),
+            "direct_count": len(direct_entries),
+            "deferred_count": len(deferred_entries),
+            "model_visible_count": len(direct_entries) + bridge_count if active else len(entries),
+            "direct_schema_tokens": direct_tokens,
+            "deferred_schema_tokens": deferred_tokens,
+            "estimated_schema_tokens_saved": deferred_tokens if active else 0,
+        }
 
     def execute(self, name, arguments):
         if name == TOOL_SEARCH_NAME:
@@ -567,12 +578,11 @@ class ToolRegistry:
         return direct, deferred
 
     def _is_deferrable(self, entry: ToolEntry) -> bool:
-        if entry.name.startswith("mcp__"):
-            return True
-        toolset = str(entry.toolset or "core").lower()
-        if toolset.startswith("mcp"):
-            return True
-        return toolset not in CORE_TOOLSETS
+        if entry.name in BRIDGE_TOOL_NAMES:
+            return False
+        if entry.name in SIERRA_CORE_TOOLS:
+            return False
+        return True
 
     def _should_activate_tool_search(self, deferred_entries: list[ToolEntry]) -> bool:
         config = self._tool_search_config
@@ -580,8 +590,7 @@ class ToolRegistry:
             return False
         if config.enabled == "on":
             return True
-        schema_chars = len(json.dumps([entry.definition() for entry in deferred_entries], ensure_ascii=False))
-        schema_token_estimate = max(1, int(schema_chars * 0.35))
+        schema_token_estimate = _estimate_schema_tokens(deferred_entries)
         threshold_tokens = int(config.context_window * (config.threshold_pct / 100.0))
         return schema_token_estimate >= max(1, threshold_tokens)
 
@@ -777,6 +786,22 @@ def _rank_tool_matches(query: str, entries: list[ToolEntry]) -> list[tuple[ToolE
             if lowered in entry.name.lower() or lowered in str(entry.description or "").lower()
         ]
     return sorted(scores, key=lambda item: (-item[1], item[0].name))
+
+
+def _estimate_schema_tokens(entries: list[ToolEntry]) -> int:
+    total_chars = 0
+    for entry in entries:
+        try:
+            total_chars += len(
+                json.dumps(
+                    entry.definition(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        except (TypeError, ValueError):
+            total_chars += len(str(entry.definition()))
+    return int(math.ceil(total_chars / CHARS_PER_SCHEMA_TOKEN)) if total_chars else 0
 
 
 def _tool_tokens(entry: ToolEntry) -> list[str]:

@@ -112,6 +112,66 @@ class ToolSearchTests(unittest.TestCase):
         self.assertIn("mcp__github__create_issue", tool_names)
         self.assertNotIn("tool_search", tool_names)
 
+    def test_auto_mode_uses_effective_prompt_budget(self):
+        large_description = "external integration schema " * 1200
+        self.registry.register(
+            name="mcp__large__operation",
+            description=large_description,
+            parameters={
+                "type": "object",
+                "properties": {"payload": {"type": "string"}},
+            },
+            handler=lambda **kwargs: json.dumps(kwargs),
+            toolset="mcp-large",
+        )
+        self.registry.configure_tool_search(
+            {"enabled": "auto", "threshold_pct": 10},
+            context_window=25_000,
+        )
+
+        tool_names = {
+            item["function"]["name"]
+            for item in self.registry.get_definitions()
+        }
+        status = self.registry.tool_search_status()
+
+        self.assertTrue(status["active"])
+        self.assertGreaterEqual(
+            status["deferred_schema_tokens"],
+            status["threshold_tokens"],
+        )
+        self.assertIn("tool_search", tool_names)
+        self.assertNotIn("mcp__large__operation", tool_names)
+
+    def test_plugin_using_core_toolset_name_is_still_deferred(self):
+        self.registry.register(
+            name="plugin_browser_magic",
+            description="Plugin-provided browser operation",
+            parameters={"type": "object", "properties": {}},
+            handler=lambda **kwargs: json.dumps({"ok": True}),
+            toolset="browser",
+        )
+        self.registry.configure_tool_search({"enabled": "on"}, context_window=100000)
+
+        tool_names = {
+            item["function"]["name"]
+            for item in self.registry.get_definitions()
+        }
+
+        self.assertIn("read_file", tool_names)
+        self.assertNotIn("plugin_browser_magic", tool_names)
+        self.assertIn("tool_search", tool_names)
+
+    def test_tool_search_status_reports_schema_savings(self):
+        self.registry.configure_tool_search({"enabled": "on"}, context_window=100000)
+        status = self.registry.tool_search_status()
+
+        self.assertTrue(status["active"])
+        self.assertEqual(status["direct_count"], 1)
+        self.assertEqual(status["deferred_count"], 2)
+        self.assertGreater(status["estimated_schema_tokens_saved"], 0)
+        self.assertEqual(status["model_visible_count"], 4)
+
     def test_unavailable_tool_is_hidden_from_schema_and_search(self):
         self.registry.register(
             name="mcp__github__delete_repo",

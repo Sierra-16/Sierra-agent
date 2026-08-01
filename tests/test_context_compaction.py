@@ -227,8 +227,8 @@ class ContextCompactionTests(unittest.TestCase):
 
     def test_summary_failure_uses_local_fallback(self):
         messages = [
-            {"role": "user", "content": "old " + "a" * 1200},
-            {"role": "assistant", "content": "answer " + "b" * 1200},
+            {"role": "user", "content": "old " + "a" * 8000},
+            {"role": "assistant", "content": "answer " + "b" * 8000},
             {"role": "user", "content": "latest"},
             {"role": "assistant", "content": "current"},
         ]
@@ -238,7 +238,7 @@ class ContextCompactionTests(unittest.TestCase):
         )
         agent.compression_keep_tokens = 1
 
-        result = agent.compress_messages()
+        result = agent.compress_messages(force=True)
 
         self.assertTrue(result["compressed"])
         self.assertEqual(result["reason"], "summary_fallback")

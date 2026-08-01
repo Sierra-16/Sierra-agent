@@ -30,6 +30,9 @@ from .auxiliary_config import auxiliary_status
 from .capabilities import CapabilityRegistry
 from .commands import command_catalog, command_help_text, complete_commands, normalize_command_name
 from .gateway import GatewayRuntime, sanitize_gateway_event
+from .mcp.manager import normalize_transport as normalize_mcp_transport
+from .mcp.manager import sanitize_name as sanitize_mcp_name
+from .mcp.manager import unique_name as unique_mcp_name
 from .safety import SafetyGate, sanitize_text
 from .skills.loader import SkillLoader
 from .tools.registry import BRIDGE_TOOL_NAMES
@@ -1406,7 +1409,14 @@ def _apply_toolset_runtime_config(app: FastAPI) -> None:
     registry = getattr(agent, "tools", None)
     configure_tools = getattr(registry, "configure_tools", None)
     if callable(configure_tools):
-        configure_tools(tools_config, context_window=_active_context_window(config))
+        agent._tools_config = tools_config
+        configure_tools(
+            tools_config,
+            context_window=_int(
+                getattr(agent, "context_window", None),
+                _active_context_window(config),
+            ),
+        )
     _safe_call(agent, "refresh_capabilities", default=None)
     build_prompt = getattr(agent, "_build_system_prompt", None)
     if callable(build_prompt):
@@ -1656,17 +1666,35 @@ def _mcp_diagnostics(config: dict[str, Any], agent: Any) -> dict[str, Any]:
     runtime_status = _mcp(agent)
     runtime_servers = runtime_status.get("servers") if isinstance(runtime_status.get("servers"), list) else []
     runtime_by_name = {
-        str(server.get("name") or server.get("id") or ""): server
+        sanitize_mcp_name(str(server.get("name") or server.get("id") or "")): server
         for server in runtime_servers
         if isinstance(server, dict)
     }
     items = []
+    configured_runtime_names: list[str] = []
+    matched_runtime_names: set[str] = set()
     for server in configured:
         name = str(server.get("name") or "")
-        transport = str(server.get("type") or "stdio")
+        transport = normalize_mcp_transport(server.get("type") or "stdio")
         enabled = bool(server.get("enabled", True))
         raw_server = raw_servers.get(name) if isinstance(raw_servers.get(name), dict) else {}
-        runtime = runtime_by_name.get(name, {})
+        runtime_definition = (
+            raw_server.get("url")
+            if transport == "streamablehttp"
+            else raw_server.get("command")
+        )
+        has_runtime_definition = bool(str(runtime_definition or "").strip())
+        runtime: dict[str, Any] = {}
+        runtime_name = ""
+        if has_runtime_definition:
+            runtime_name = unique_mcp_name(
+                sanitize_mcp_name(name),
+                configured_runtime_names,
+            )
+            configured_runtime_names.append(runtime_name)
+            runtime = runtime_by_name.get(runtime_name, {})
+        if runtime:
+            matched_runtime_names.add(runtime_name)
         runtime_state = str(runtime.get("status") or "").strip()
         runtime_running = bool(runtime.get("running")) or runtime_state == "running"
         runtime_error = str(runtime.get("error") or "").strip()
@@ -1729,10 +1757,10 @@ def _mcp_diagnostics(config: dict[str, Any], agent: Any) -> dict[str, Any]:
             "issues": issues,
         })
 
-    configured_names = {str(server.get("name") or "") for server in configured}
-    for name, runtime in runtime_by_name.items():
-        if not name or name in configured_names:
+    for runtime_name, runtime in runtime_by_name.items():
+        if not runtime_name or runtime_name in matched_runtime_names:
             continue
+        name = str(runtime.get("name") or runtime.get("id") or runtime_name)
         items.append({
             "name": name,
             "transport": runtime.get("transport") or runtime.get("type") or "unknown",
@@ -2473,6 +2501,7 @@ def _tools(agent: Any) -> dict[str, Any]:
     unavailable_names = []
     toolsets: dict[str, int] = {}
     active_bridge = False
+    tool_search_status: dict[str, Any] = {}
 
     if registry is not None:
         try:
@@ -2498,6 +2527,10 @@ def _tools(agent: Any) -> dict[str, Any]:
             active_bridge = any(name in BRIDGE_TOOL_NAMES for name in direct_names)
         except Exception:
             direct_names = []
+        try:
+            tool_search_status = registry.tool_search_status()
+        except Exception:
+            tool_search_status = {}
 
         for name in names:
             try:
@@ -2573,14 +2606,24 @@ def _tools(agent: Any) -> dict[str, Any]:
         "direct": len([name for name in direct_names if name]),
         "deferred": len(deferred_names),
         "tool_search_active": active_bridge,
+        "tool_search": tool_search_status,
         "toolsets": toolsets,
         "toolset_config": toolset_config,
         "items": entries[:80],
-        "diagnostics": _tools_diagnostics(entries, active_bridge),
+        "diagnostics": _tools_diagnostics(
+            entries,
+            active_bridge,
+            tool_search_status=tool_search_status,
+        ),
     }
 
 
-def _tools_diagnostics(entries: list[dict[str, Any]], active_bridge: bool) -> dict[str, Any]:
+def _tools_diagnostics(
+    entries: list[dict[str, Any]],
+    active_bridge: bool,
+    *,
+    tool_search_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     risk_counts: dict[str, int] = {}
     permission_counts: dict[str, int] = {}
     exposure_counts: dict[str, int] = {}
@@ -2624,6 +2667,7 @@ def _tools_diagnostics(entries: list[dict[str, Any]], active_bridge: bool) -> di
             "toolsets": toolset_counts,
             "availability": availability_counts,
             "tool_search_active": active_bridge,
+            "tool_search": tool_search_status or {},
         },
         "recommendations": recommendations,
     }
