@@ -64,6 +64,21 @@ class ConfigValidationTests(unittest.TestCase):
     def test_inactive_model_placeholder_does_not_block_startup(self):
         validate_startup_config(self.base_config())
 
+    def test_minimal_beginner_config_is_valid(self):
+        config = {
+            "models": {
+                "default": {
+                    "name": "example-model",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "real-model-key",
+                }
+            },
+            "active_model": "default",
+            "search": {"backend": "duckduckgo"},
+        }
+
+        validate_startup_config(config)
+
     def test_switching_to_placeholder_model_is_rejected(self):
         with self.assertRaises(StartupConfigError) as ctx:
             validate_model_config(self.base_config(), "qwen")

@@ -75,7 +75,7 @@ Copy-Item config.example.json config.json
 ```json
 {
   "models": {
-    "deepseek": {
+    "default": {
       "name": "deepseek-chat",
       "base_url": "https://api.deepseek.com",
       "api_key": "YOUR_API_KEY",
@@ -85,11 +85,11 @@ Copy-Item config.example.json config.json
       "supports_vision": false
     }
   },
-  "active_model": "deepseek"
+  "active_model": "default"
 }
 ```
 
-`config.example.json` 包含模型、搜索、视觉、记忆、权限、MCP、插件和其他完整配置示例。
+`config.example.json` 只保留首次启动需要了解的内容。权限、会话、上下文压缩、审计、任务和 Skill 会使用 Sierra 的内置默认值；视觉、向量记忆、插件与 MCP 可以在需要时通过 Web 设置开启。
 
 ### 5. 启动 TUI
 
